@@ -50,6 +50,9 @@ Supported actions include `look`, `go <direction>`, `take <item>`, `use <item>`,
 - `game/` — models, world data, and deterministic engine
 - `llm/` — Ollama client, prompts, parser, and narrator
 - `tests/test_engine.py` — engine tests without the LLM
+- `ollama-plan.md` — model choice, timing, data flow, prompts, and risks
+- `setup.md` — full technical setup guide
+- `refinements-changes.md` — scope and decision log
 
 ## Tests
 
