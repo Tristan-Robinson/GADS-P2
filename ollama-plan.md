@@ -1,6 +1,6 @@
 # Ollama integration plan
 
-This document describes how Dungeon Adventure uses a local Ollama model: which model to run, how long inference typically takes, how data moves through the app, how prompts are built, and what can go wrong.
+This document describes how Cryptoriale uses a local Ollama model: which model to run, how long inference typically takes, how data moves through the app, how prompts are built, and what can go wrong.
 
 ## Model choice
 
@@ -17,7 +17,7 @@ The game reads model settings from `config.py`:
 
 The integration needs two capabilities on every turn:
 
-1. **Structured command parsing** into a small fixed action set (`look`, `go`, `take`, `use`, `attack`, `inventory`, `help`, `quit`).
+1. **Structured command parsing** into a small fixed action set (`look`, `go`, `take`, `use`, `attack`, `talk`, `inventory`, `help`, `quit`).
 2. **Short second-person narration** grounded in engine output, not free-form world generation.
 
 A general instruction-following chat model is enough for v1. The Python engine owns rules, stats, combat, and win/lose logic. The model does not need tool calling, RAG, or dungeon generation.
@@ -71,6 +71,15 @@ There is no in-game timer or metrics collection in v1. For demos, assume:
 
 For smoother demos, open the Ollama app first, run one chat message or `ollama run llama3`, then start `python main.py`.
 
+## Combat and the LLM worker
+
+- Typing `attack <enemy>` runs `apply_action` through the background `LLMWorker` and returns `ActionResult` with **`battle_pending=True`**. No HP changes happen in that packet.
+- The worker **skips the narrator** when `battle_pending` is true so you are not waiting on Ollama while the fight UI is opening.
+- Quest and merchant flows may set `open_quest_offer_ui` or `open_merchant_ui`; the GUI shows the overlay and uses the engine **message** without a narrator call for that packet.
+- All **battle rounds** (Attack / Defend / Surrender) are handled in `game/battle.py` on the **main Pygame thread** via `GameScene` and `BattlePanel` in `gui/widgets.py`. This avoids races on `GameState` and keeps the window responsive.
+- After the fight, a short **RESULT** block is appended to the narration panel from engine facts (no extra LLM call for each round).
+- **Surrender** applies heavy damage, sets `Enemy.backing_off`, and clears `pending_battle_enemy_id` so `go` is no longer blocked by that foe; the model is not involved in round resolution.
+
 ## Data flow
 
 ### High-level loop
@@ -93,10 +102,10 @@ flowchart LR
 
 - Current room id, name, and description
 - Exits with lock state
-- Visible item ids and names
-- Visible enemy ids, names, and HP
-- Inventory item ids, names, and usable flag
-- Player HP and game-over flags
+- Visible item ids, names, and **kind** (`misc`, `potion`, `key`, `weapon`, `buff`)
+- Visible enemy ids, names, HP, and **`backing_off`**
+- Inventory item ids, names, usable flag, and kind
+- Player HP, **max HP**, **base attack**, **strength**, **agility**, **armor**, **effective attack**, **equipped weapon** name
 
 The engine does not send the full dungeon graph every turn. Only the current room slice is included.
 

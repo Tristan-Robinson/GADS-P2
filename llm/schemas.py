@@ -11,6 +11,7 @@ class ParsedActionType(str, Enum):
     TAKE = "take"
     USE = "use"
     ATTACK = "attack"
+    TALK = "talk"
     INVENTORY = "inventory"
     HELP = "help"
     QUIT = "quit"

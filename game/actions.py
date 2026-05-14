@@ -10,6 +10,7 @@ class ActionType(str, Enum):
     TAKE = "take"
     USE = "use"
     ATTACK = "attack"
+    TALK = "talk"
     INVENTORY = "inventory"
     HELP = "help"
     QUIT = "quit"
@@ -40,6 +41,12 @@ class ActionResult:
     enemy_defeated: str | None = None
     game_over: bool = False
     outcome: str = "none"
+    descend: bool = False
+    player_hp_after: int = 0
+    player_max_hp: int = 0
+    battle_pending: bool = False
+    open_quest_offer_ui: bool = False
+    open_merchant_ui: bool = False
 
     def to_payload(self) -> dict:
         return {
@@ -59,4 +66,10 @@ class ActionResult:
             "enemy_defeated": self.enemy_defeated,
             "game_over": self.game_over,
             "outcome": self.outcome,
+            "descend": self.descend,
+            "player_hp_after": self.player_hp_after,
+            "player_max_hp": self.player_max_hp,
+            "battle_pending": self.battle_pending,
+            "open_quest_offer_ui": self.open_quest_offer_ui,
+            "open_merchant_ui": self.open_merchant_ui,
         }

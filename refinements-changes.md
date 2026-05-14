@@ -1,6 +1,6 @@
 # Refinements and changes log
 
-Ongoing record of scope changes, refinements, and AI-assisted implementation decisions for Dungeon Adventure.
+Ongoing record of scope changes, refinements, and AI-assisted implementation decisions for Cryptoriale.
 
 ## How to use this log
 
@@ -100,9 +100,36 @@ Each entry should state what changed, why, and what was left out if scope moved.
 
 ---
 
+## 2026-05-14 — Turn-based combat minigame and deeper loot (AI-assisted implementation)
+
+**Decision:** Replace one-shot `attack` resolution with a Pygame **Combat** panel (Attack / Defend / Surrender), add player combat stats, weapons, buff consumables, and extra loot on levels at **depth >= 2**.
+
+**Engine:** `begin_attack()` sets `pending_battle_enemy_id`; `game/battle.apply_round()` mutates HP on the UI thread; enemies can `backing_off` after surrender so `_go` only checks blocking foes. `ItemKind` and extended `Item` / `Player` fields support weapons and buffs.
+
+**GUI:** `BattlePanel` on the right; `LLMWorker` skips narration when `battle_pending`; text input disabled during fights.
+
+**Tests:** `tests/test_battle.py` for surrender, defend, buff use, scripted kills; `tests/test_engine.py` updated for scripted combat.
+
+**Not done here:** type matchups, multi-enemy fights, LLM narration per combat round.
+
+---
+
+## 2026-05-14 — Documentation, prompts log, and PyInstaller packaging
+
+**Decision:** Ship a **prompts-used.md** best-effort request log, refresh **README** /
+**setup** / **ollama-plan** for current Cryptoriale features (quests, merchants,
+`talk`, display modes, inventory tabs, procedural levels), and add a **Windows
+PyInstaller** build path (`requirements-dev.txt`, `cryptoriale.spec`,
+`scripts/build_release.ps1`). `dist/` and `build/` remain gitignored.
+
+**Related:** [prompts-used.md](prompts-used.md) for the user-request chronicle;
+git history for full diffs.
+
+---
+
 ## Open follow-ups (not yet implemented)
 
-- Optional `pytest` in `requirements.txt` or a dev extras file
+- Optional `pytest` in `requirements.txt` (currently documented as manual `pip install pytest`)
 - Desktop launcher script for Ollama plus `main.py` demos
 - In-game timing metrics for parser and narrator latency
 - Save/load and larger dungeons beyond the single `world.py` graph

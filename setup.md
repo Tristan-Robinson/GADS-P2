@@ -1,6 +1,6 @@
 # Technical setup guide
 
-Complete setup for running Dungeon Adventure with a local Ollama model on your machine.
+Complete setup for running Cryptoriale with a local Ollama model on your machine.
 
 ## Overview
 
@@ -100,11 +100,30 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Optional: release build (PyInstaller)
+
+One-time install of the packaging tool:
+
+```powershell
+pip install -r requirements-dev.txt
+```
+
+From the project root (PowerShell):
+
+```powershell
+.\scripts\build_release.ps1
+```
+
+This writes `dist/Cryptoriale/` with `Cryptoriale.exe`. `build/` and `dist/` are
+gitignored. The executable still needs **Ollama** running locally (same check as
+`python main.py`).
+
 Packages installed:
 
 - `ollama` — local API client
 - `pydantic` — structured output validation
-- `rich` — terminal status panels
+- `pygame` — windowed game runtime and rendering
+- `rich` — colored startup / error messages in the launcher
 
 ## Install Ollama
 
@@ -180,12 +199,23 @@ Startup checks:
 
 If either check fails, the game prints an error and exits before gameplay.
 
+A window titled **Cryptoriale** opens. Press Enter or click **Descend** on the title screen to begin. The launcher only prints to the terminal for startup errors; gameplay happens entirely inside the window.
+
+### In-game controls
+
+- Type natural commands into the input box (`look around`, `go north`, `attack goblin`, `talk quest`, `take all`, `use the iron key`, `inventory`, `quit`).
+- Enter submits a command.
+- Up / Down arrows cycle through your command history.
+- Mouse wheel or PgUp / PgDown scroll the narration panel.
+- Esc returns to the title screen.
+
 ### Demo tips
 
 1. Start Ollama before the game.
 2. Warm the model with `ollama run <model>` or one message in the Ollama app.
-3. Keep the terminal wide enough for Rich status panels.
+3. Give the window a moment after launch — the opening narration is the first LLM call.
 4. Use simple phrases first (`look around`, `go north`, `attack goblin`) while verifying the stack.
+5. Clearing the vault on each level descends you into a new themed level with different mobs and items; the run only ends on defeat.
 
 ## Run engine tests (no LLM required)
 
@@ -240,5 +270,6 @@ Or import and run the test functions in `tests/test_engine.py` with Python direc
 ## Related documentation
 
 - `README.md` — quick start and repository overview
+- `prompts-used.md` — best-effort log of user-driven feature requests
 - `ollama-plan.md` — model choice, timing, data flow, prompts, and risks
 - `refinements-changes.md` — scope and implementation decision log
