@@ -12,6 +12,8 @@ The game reads model settings from `config.py`:
 - `OLLAMA_MODEL`: `llama3`
 - `PARSER_TEMPERATURE`: `0.0`
 - `NARRATOR_TEMPERATURE`: `0.7`
+- `AUTO_PULL_ON_STARTUP`: `true`
+- `OLLAMA_STARTUP_TIMEOUT_SEC`: `90`
 
 ### Why a general local chat model
 
@@ -40,12 +42,18 @@ Use one model for both parser and narrator in v1. Change only `OLLAMA_MODEL` in 
 
 ### Startup validation
 
-`OllamaClient.verify()` in `llm/client.py` checks that:
+`OllamaClient.ensure_ready()` in `llm/client.py` (called from `main.py`):
 
-1. Ollama responds at `OLLAMA_HOST`.
-2. The requested model base name exists locally (`llama3` matches `llama3:latest`).
+1. Checks that Ollama responds at `OLLAMA_HOST`.
+2. If not reachable, runs `ollama serve` and polls until ready or timeout.
+3. If the requested model base name is missing (`llama3` matches `llama3:latest`),
+   streams `client.pull()` with console progress when `AUTO_PULL_ON_STARTUP` is enabled.
+4. Re-verifies the model list before opening the Pygame window.
 
-If either check fails, `main.py` exits before the game loop with a clear error.
+`verify()` remains as an alias to `ensure_ready()` for compatibility.
+
+If setup fails, `main.py` exits before the game loop with a clear error (install
+Ollama from https://ollama.com, check network/disk, or retry).
 
 ## Inference timing
 
@@ -209,8 +217,8 @@ Ollama may interpret phrasing and narrate outcomes. Ollama may not create rooms,
 
 | Risk | Impact | Mitigation in v1 |
 |------|--------|------------------|
-| Ollama not running | Game exits at startup | `verify()` with explicit host and model errors |
-| Model not pulled | Game exits at startup | Error includes `ollama pull <model>` |
+| Ollama not running | Game exits at startup | `ensure_ready()` tries `ollama serve`, then errors with install link |
+| Model not pulled | Game exits at startup | Auto-pull on first launch when `AUTO_PULL_ON_STARTUP` is true |
 | Invalid parser JSON | Wrong or missing action | Retry, then keyword fallback, then `help` |
 | Hallucinated narration | Story claims non-existent items or outcomes | Narrator rules, payload-only facts, fallback to engine `message` |
 | Ambiguous player input | Unintended action | Low parser temperature; context slice; safe engine rejections |

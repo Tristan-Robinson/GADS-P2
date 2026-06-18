@@ -22,7 +22,7 @@ console = Console()
 def main() -> int:
     try:
         client = OllamaClient()
-        client.verify()
+        client.ensure_ready(console)
     except OllamaUnavailableError as exc:
         console.print(f"[red]{exc}[/red]")
         return 1

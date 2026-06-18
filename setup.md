@@ -146,13 +146,17 @@ If `ollama` is not found, reopen the terminal after installation or add Ollama t
 
 ## Pull and run models
 
-Pull the model named in `config.py`:
+For **players** using `python main.py` or `Cryptoriale.exe`, the game downloads
+the model in `config.py` automatically on first launch when
+`AUTO_PULL_ON_STARTUP` is true (default).
+
+Developers can still pull manually or pre-warm a model:
 
 ```bash
 ollama pull llama3
 ```
 
-To use another model, pull it and update `OLLAMA_MODEL` in `config.py` to match.
+To use another model, update `OLLAMA_MODEL` in `config.py` to match.
 
 ### Optional interactive smoke test
 
@@ -192,14 +196,13 @@ From the project root with your virtual environment activated:
 python main.py
 ```
 
-Startup checks:
+Startup checks (via `OllamaClient.ensure_ready()` in `main.py`):
 
-1. Ollama is reachable at `OLLAMA_HOST`
-2. The configured model is available locally
+1. Ollama responds at `OLLAMA_HOST` (starts `ollama serve` if installed but idle).
+2. The configured model is present locally; if not, it is downloaded with console progress.
+3. If either step fails, the game prints an error and exits before gameplay.
 
-If either check fails, the game prints an error and exits before gameplay.
-
-A window titled **Cryptoriale** opens. Press Enter or click **Descend** on the title screen to begin. The launcher only prints to the terminal for startup errors; gameplay happens entirely inside the window.
+A window titled **Cryptoriale** opens after setup completes. Press Enter or click **Descend** on the title screen to begin.
 
 ### In-game controls
 
@@ -246,7 +249,9 @@ and background worker queue behavior — no Ollama or display required for most 
 
 ### `Model 'llama3' is not available`
 
-- Run `ollama pull llama3`, or change `OLLAMA_MODEL` to a model from `ollama list`.
+- First launch should download the model automatically. Check internet and disk space.
+- Or run `ollama pull llama3`, or change `OLLAMA_MODEL` to a model from `ollama list`.
+- Set `AUTO_PULL_ON_STARTUP = False` in `config.py` to require a manual pull.
 
 ### Slow responses
 

@@ -31,9 +31,12 @@ narrated by a local [Ollama](https://ollama.com/) model.
 
 ## Requirements
 
-- Python 3.10 or newer
-- [Ollama](https://ollama.com/) installed and running locally
-- A pulled chat model (default: `llama3`)
+- Python 3.10 or newer (source install), or the Windows **Cryptoriale** folder build
+- [Ollama](https://ollama.com/) installed once on the machine
+
+The game **starts Ollama automatically** if it is installed but not running, and
+**downloads** the configured model on first launch (default `llama3`). No manual
+`ollama pull` is required for players.
 
 ## Setup
 
@@ -44,13 +47,9 @@ narrated by a local [Ollama](https://ollama.com/) model.
    pip install -r requirements.txt
    ```
 
-3. Start Ollama and pull the configured model:
+3. Install [Ollama](https://ollama.com/) if you have not already.
 
-   ```bash
-   ollama pull llama3
-   ```
-
-4. Optional: change `OLLAMA_HOST` or `OLLAMA_MODEL` in `config.py`.
+4. Optional: change `OLLAMA_HOST`, `OLLAMA_MODEL`, or `AUTO_PULL_ON_STARTUP` in `config.py`.
 
 ## Run
 
@@ -59,8 +58,8 @@ python main.py
 ```
 
 A window titled "Cryptoriale" opens. Press Enter or click **Descend**
-on the title screen to begin. Ollama must be reachable at
-`http://localhost:11434` before the game starts.
+on the title screen to begin. On first launch the console may show Ollama
+startup and model download progress before the game window appears.
 
 ## Release build (Windows, PyInstaller)
 
@@ -71,9 +70,10 @@ pip install -r requirements.txt -r requirements-dev.txt
 .\scripts\build_release.ps1
 ```
 
-The frozen app still requires **Ollama** on the machine; `main.py` checks the
-service before opening the window. Output: `dist/Cryptoriale/` with
-`Cryptoriale.exe` (console enabled so startup errors are visible).
+The frozen app still requires **Ollama** installed on the machine. On first
+run the executable starts Ollama if needed and downloads the configured model
+automatically. Output: `dist/Cryptoriale/` with `Cryptoriale.exe` (console
+enabled so startup and download progress are visible).
 
 ## Controls
 
