@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pygame
+
 
 RESOLUTIONS: list[tuple[int, int]] = [
     (1024, 640),
@@ -41,10 +43,31 @@ def _settings_path() -> Path:
     return Path(__file__).resolve().parent.parent / "settings.json"
 
 
+def get_desktop_resolution() -> tuple[int, int]:
+    try:
+        info = pygame.display.Info()
+        w, h = int(info.current_w), int(info.current_h)
+        if w > 0 and h > 0:
+            return (w, h)
+    except pygame.error:
+        pass
+    return tuple(DEFAULT_SETTINGS["resolution"])
+
+
+def resolution_choices(current: tuple[int, int] | None = None) -> list[tuple[int, int]]:
+    choices = list(RESOLUTIONS)
+    if current is not None and current not in choices:
+        choices.append(current)
+        choices.sort(key=lambda size: (size[0], size[1]))
+    return choices
+
+
 def load_settings() -> dict:
     path = _settings_path()
     if not path.exists():
-        return dict(DEFAULT_SETTINGS)
+        merged = dict(DEFAULT_SETTINGS)
+        merged["resolution"] = list(get_desktop_resolution())
+        return merged
     try:
         with path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)

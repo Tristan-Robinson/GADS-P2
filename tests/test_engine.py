@@ -74,6 +74,10 @@ def test_parse_fallback_recognizes_commands() -> None:
     assert engine.parse_fallback("north").action == ActionType.GO
     assert engine.parse_fallback("inventory").action == ActionType.INVENTORY
     assert engine.parse_fallback("attack goblin").action == ActionType.ATTACK
+    interact = engine.parse_fallback("interact brewing shelf")
+    assert interact is not None and interact.action == ActionType.INTERACT
+    craft = engine.parse_fallback("craft goop potion")
+    assert craft is not None and craft.action == ActionType.CRAFT
     m = engine.parse_fallback("merchant")
     assert m is not None and m.action == ActionType.TALK and m.target == "merchant"
     q = engine.parse_fallback("quest")
@@ -220,6 +224,24 @@ def test_look_message_lists_available_directions() -> None:
     assert "locked" in msg
 
 
+def test_go_into_room_uses_look_narration_mode() -> None:
+    state = build_initial_state()
+    to_hall = exit_between(state.rooms, "entrance", "hall")
+
+    result = engine.apply_action(
+        state, PlayerAction(action=ActionType.GO, direction=to_hall)
+    )
+
+    assert result.success
+    assert result.action == ActionType.GO
+    assert result.narration_mode == "look"
+    msg = result.message.lower()
+    assert "you move" in msg
+    assert "you can go" in msg
+    for ex in state.rooms["hall"].exits:
+        assert ex.direction in msg
+
+
 def test_normalize_direction_maps_synonyms() -> None:
     assert engine.normalize_direction("Forward") == "north"
     assert engine.normalize_direction("left") == "west"
@@ -321,7 +343,7 @@ def test_intent_parser_downgrades_implicit_quit() -> None:
     parser = IntentParser(StubClient())
 
     downgraded = parser.parse("force open the door", state)
-    assert downgraded.action == ActionType.HELP, "implicit quit must be downgraded"
+    assert downgraded.action == ActionType.CLARIFY, "implicit quit must be downgraded"
 
     real_quit = parser.parse("quit", state)
     assert real_quit.action == ActionType.QUIT
@@ -419,3 +441,314 @@ def test_quest_giver_appears_in_varied_rooms_when_not_force_first() -> None:
             if any(n.kind == "quest" for n in room.npcs):
                 rooms_with_quest.add(rid)
     assert {"entrance", "hall", "armory"}.issubset(rooms_with_quest)
+
+
+def test_interact_brewing_shelf() -> None:
+    from game.models import RoomFeature
+
+    state = build_initial_state()
+    to_hall = exit_between(state.rooms, "entrance", "hall")
+    engine.apply_action(state, PlayerAction(action=ActionType.GO, direction=to_hall))
+    state.rooms["hall"].features.append(
+        RoomFeature(
+            id="test_brewing_shelf",
+            name="brewing shelf",
+            description="Cracked glassware and dried herbs clutter a shelving unit.",
+            crafting_station=True,
+            station_tag="brewing_shelf",
+        )
+    )
+    result = engine.apply_action(
+        state, PlayerAction(action=ActionType.INTERACT, target="brewing shelf")
+    )
+    assert result.success
+    assert "workstation" in result.message.lower() or "craft" in result.message.lower()
+
+
+def test_reject_does_not_mutate_state() -> None:
+    state = build_initial_state()
+    hp = state.player.hp
+    inv_len = len(state.player.inventory)
+    room_id = state.current_room_id
+    result = engine.apply_action(
+        state,
+        PlayerAction(action=ActionType.REJECT, player_intent="become a cloud"),
+    )
+    assert not result.success
+    assert result.rejection
+    assert state.player.hp == hp
+    assert len(state.player.inventory) == inv_len
+    assert state.current_room_id == room_id
+
+
+def test_look_lists_features() -> None:
+    from game.models import RoomFeature
+
+    state = build_initial_state()
+    state.rooms["entrance"].features.append(
+        RoomFeature(
+            id="test_sconce",
+            name="wall sconce",
+            description="An iron sconce holds a half-melted torch.",
+            improvised_weapon=True,
+            improv_damage=4,
+        )
+    )
+    result = engine.apply_action(state, PlayerAction(action=ActionType.LOOK))
+    assert any("sconce" in f.lower() for f in result.visible_features)
+
+
+def test_room_facts_summary_lists_entities() -> None:
+    from game.models import RoomFeature
+
+    state = build_initial_state()
+    state.rooms["entrance"].features.append(
+        RoomFeature(id="t", name="wall sconce", description="A torch sconce.")
+    )
+    summary = state.room_facts_summary()
+    assert "wall sconce" in summary
+    assert "Dusty Entrance" in summary
+
+
+def test_ask_does_not_mutate_state() -> None:
+    state = build_initial_state()
+    hp = state.player.hp
+    room_id = state.current_room_id
+    result = engine.apply_action(
+        state,
+        PlayerAction(action=ActionType.ASK, player_intent="what is here?"),
+    )
+    assert result.success
+    assert result.narration_mode == "ask"
+    assert state.player.hp == hp
+    assert state.current_room_id == room_id
+
+
+def test_clarify_does_not_mutate_state() -> None:
+    state = build_initial_state()
+    inv_len = len(state.player.inventory)
+    result = engine.apply_action(
+        state,
+        PlayerAction(action=ActionType.CLARIFY, player_intent="do the thing"),
+    )
+    assert not result.success
+    assert result.narration_mode == "clarify"
+    assert len(state.player.inventory) == inv_len
+
+
+def test_parse_fallback_question_maps_to_ask() -> None:
+    act = engine.parse_fallback("what is in the room?")
+    assert act is not None
+    assert act.action == ActionType.ASK
+
+
+def test_available_actions_includes_interact_and_craft() -> None:
+    from game.models import RoomFeature
+
+    state = build_initial_state()
+    to_hall = exit_between(state.rooms, "entrance", "hall")
+    engine.apply_action(state, PlayerAction(action=ActionType.GO, direction=to_hall))
+    state.rooms["hall"].features.append(
+        RoomFeature(
+            id="test_brewing_shelf",
+            name="brewing shelf",
+            description="A workstation.",
+            crafting_station=True,
+            station_tag="brewing_shelf",
+        )
+    )
+    actions = state.available_actions()
+    assert any(a.startswith("interact ") for a in actions)
+
+
+def test_interact_partial_feature_name() -> None:
+    from game.models import RoomFeature
+
+    state = build_initial_state()
+    state.rooms["entrance"].features.append(
+        RoomFeature(
+            id="test_brewing_shelf",
+            name="brewing shelf",
+            description="Cracked glassware and dried herbs.",
+            crafting_station=True,
+            station_tag="brewing_shelf",
+        )
+    )
+    result = engine.apply_action(
+        state, PlayerAction(action=ActionType.INTERACT, target="shelf")
+    )
+    assert result.success
+    assert result.narration_mode == "interact"
+
+
+def test_interact_floor_item() -> None:
+    from game.models import Item
+
+    state = build_initial_state()
+    state.rooms["entrance"].items.append(
+        Item(id="test_vial", name="empty glass vial", description="A dusty vial.")
+    )
+    result = engine.apply_action(
+        state, PlayerAction(action=ActionType.INTERACT, target="empty glass vial")
+    )
+    assert result.success
+    assert result.narration_mode == "interact"
+    assert result.interaction_kind == "item"
+
+
+def test_interact_enemy_flavor() -> None:
+    state = build_initial_state()
+    to_hall = exit_between(state.rooms, "entrance", "hall")
+    engine.apply_action(state, PlayerAction(action=ActionType.GO, direction=to_hall))
+    result = engine.apply_action(
+        state, PlayerAction(action=ActionType.INTERACT, target="goblin")
+    )
+    assert result.success
+    assert result.narration_mode == "interact"
+    assert result.interaction_kind == "enemy"
+
+
+def test_interact_scenery_from_room_summary() -> None:
+    state = build_initial_state()
+    result = engine.apply_action(
+        state, PlayerAction(action=ActionType.INTERACT, target="corridor")
+    )
+    assert result.success
+    assert result.narration_mode == "interact"
+    assert result.interaction_kind == "scenery"
+
+
+def test_available_actions_includes_interact_for_floor_item() -> None:
+    from game.models import Item
+
+    state = build_initial_state()
+    state.rooms["entrance"].items.append(
+        Item(id="test_vial", name="empty glass vial", description="A dusty vial.")
+    )
+    actions = state.available_actions()
+    assert "interact empty glass vial" in actions
+
+
+def test_interact_brewing_shelf_sets_narration_mode() -> None:
+    from game.models import RoomFeature
+
+    state = build_initial_state()
+    state.rooms["entrance"].features.append(
+        RoomFeature(
+            id="test_brewing_shelf",
+            name="brewing shelf",
+            description="A workstation.",
+            crafting_station=True,
+            station_tag="brewing_shelf",
+        )
+    )
+    result = engine.apply_action(
+        state, PlayerAction(action=ActionType.INTERACT, target="brewing shelf")
+    )
+    assert result.success
+    assert result.narration_mode == "interact"
+    assert result.interaction_kind == "fixture"
+
+
+def test_take_the_torch_with_article() -> None:
+    from game.models import Item
+
+    state = build_initial_state()
+    state.rooms["entrance"].items.append(
+        Item(id="torch", name="torch", description="A wooden torch soaked in oil.")
+    )
+    result = engine.apply_action(
+        state, PlayerAction(action=ActionType.TAKE, target="the torch")
+    )
+    assert result.success
+    assert any(i.name == "torch" for i in state.player.inventory)
+
+
+def test_parse_fallback_grab_torch() -> None:
+    act = engine.parse_fallback("grab the torch")
+    assert act is not None
+    assert act.action == ActionType.TAKE
+    assert act.target == "torch"
+
+
+def test_parse_fallback_run_north() -> None:
+    act = engine.parse_fallback("run north")
+    assert act is not None
+    assert act.action == ActionType.GO
+    assert act.direction == "north"
+
+
+def test_take_fuzzy_partial_item_name() -> None:
+    from game.models import Item
+
+    state = build_initial_state()
+    state.rooms["entrance"].items.append(
+        Item(
+            id="potion",
+            name="healing potion",
+            description="Red liquid.",
+            takeable=True,
+        )
+    )
+    result = engine.apply_action(
+        state, PlayerAction(action=ActionType.TAKE, target="potion")
+    )
+    assert result.success
+    assert any(i.name == "healing potion" for i in state.player.inventory)
+
+
+def test_parse_fallback_polite_take() -> None:
+    act = engine.parse_fallback("i want to pick up the torch")
+    assert act is not None
+    assert act.action == ActionType.TAKE
+    assert act.target == "torch"
+
+
+def test_quest_reward_when_slay_done_before_accept() -> None:
+    from game import npc_engine
+
+    state = build_initial_state()
+    to_hall = exit_between(state.rooms, "entrance", "hall")
+    engine.apply_action(state, PlayerAction(action=ActionType.GO, direction=to_hall))
+    _defeat_hall_enemy(state)
+    gold_before = state.player.gold
+    result = npc_engine.talk(state, "quest")
+    assert result.success
+    assert not result.open_quest_offer_ui
+    assert state.player.gold > gold_before
+    assert "dungeon_watcher" in state.completed_quest_npc_ids or any(
+        nid.endswith("_watcher") for nid in state.completed_quest_npc_ids
+    )
+
+
+def test_item_sell_values_differ() -> None:
+    from game import npc_engine
+    from game.economy import sell_value
+    from game.models import Item, ItemKind
+
+    torch = Item(id="torch", name="torch", description="", gold_value=4)
+    blade = Item(
+        id="blade",
+        name="blade",
+        description="",
+        kind=ItemKind.WEAPON,
+        weapon_damage=4,
+        gold_value=22,
+    )
+    assert sell_value(torch) < sell_value(blade)
+
+    from game.models import GameState, Player
+
+    rooms, _ = generate_level(5, random.Random(0), theme=DUNGEON, force_first=True)
+    state = GameState(
+        player=Player(20, 20, inventory=[torch, blade]),
+        rooms=rooms,
+        current_room_id="entrance",
+        level_depth=5,
+    )
+    assert npc_engine.talk(state, "merchant").open_merchant_ui
+    sell_torch = npc_engine.merchant_sell(state, 0)
+    state.player.inventory.insert(0, blade)
+    sell_blade = npc_engine.merchant_sell(state, 0)
+    assert sell_torch.success and sell_blade.success
+    assert "1 gold" not in sell_blade.message or "11 gold" in sell_blade.message

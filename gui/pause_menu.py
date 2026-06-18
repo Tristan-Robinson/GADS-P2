@@ -5,8 +5,10 @@ from __future__ import annotations
 import pygame
 
 from game import engine
-from gui.highlight import Color
+from gui.highlight import LEGEND_MARKER, Color, legend_block_height, legend_rows
 from gui.widgets import LABEL_BRIGHT, LABEL_DIM, Button, draw_panel
+
+LEGEND_SWATCH_SIZE = 12
 
 
 def _wrap_paragraph(font: pygame.font.Font, text: str, max_width: int) -> list[str]:
@@ -33,24 +35,51 @@ def _how_to_play_lines(body_font: pygame.font.Font, heading_font: pygame.font.Fo
     sections: list[tuple[str, str]] = [
         (
             "Commands",
-            "Type natural commands such as look around, go north, take the iron key, "
-            "take all, use the healing potion, attack the goblin, talk quest, talk hooded watcher, talk merchant, "
-            "inventory, help, or quit. "
+            "Type natural language in the command bar: look, go north, take the iron key, "
+            "take all, use the healing potion, attack the goblin, talk quest, talk hooded watcher, "
+            "talk merchant, inventory, help, or quit. "
             "Directions work as north, south, east, west, or forward, back, left, right.",
         ),
         (
+            "Command bar",
+            "Click in the bar to place the cursor; use arrow keys, Home, End, Backspace, and "
+            "Delete (hold Backspace or Delete to repeat). Ctrl+C and Ctrl+V copy and paste. "
+            "Up and Down recall recent commands. "
+            "Chain several actions in one line with semicolons, a new line, or then / and then "
+            "(example: go north; take torch). While the AI is thinking you can still type — "
+            "your next command queues and the status bar shows how many are waiting. "
+            "The bar shows Thinking... while your queued turn runs. "
+            "A chain stops if a step starts combat, opens a quest or merchant dialog, makes you "
+            "descend, or ends the game.",
+        ),
+        (
+            "Story log and keywords",
+            "Colored words in the narration mark enemies, items, exits, locks, and more — "
+            "hover a highlighted word for its meaning (see the color key below). "
+            "Drag a highlighted word into the command bar to insert it. Click a word to copy it; "
+            "right-click the command bar and choose Paste, or use Ctrl+V. "
+            "Scroll the story log with the mouse wheel or Page Up / Page Down. "
+            "When you walk into a new room, the story automatically includes a survey of what "
+            "you see there.",
+        ),
+        (
+            "Color key",
+            "Highlighted words in the story log use these colors:",
+        ),
+        (
             "Combat",
-            "When you attack an enemy, use the Combat panel on the right: Attack, Defend, "
+            "When you attack an enemy, use the Combat panel: Attack, Defend, Improvise, Spells, "
             "or Surrender. Surrender deals heavy damage but lets you break away and keep exploring "
             "while that foe hangs back.",
         ),
         (
             "Backpack and gear",
-            "Type inventory or inv in the command bar (when you are not in combat) to open your "
-            "backpack. Select a row, then Use / Equip for potions, keys, buffs, weapons, armor, "
-            "rings, and amulets. Equipped gear raises attack, defense, and agility in combat. "
-            "Use Close inventory or Esc to hide the panel. Remove clears a gear slot without using "
-            "the item. In the world, try take all or pick up all to grab every loose item here.",
+            "Click Pack next to Pause, or type inventory / inv when not in combat, to open your "
+            "backpack. Tabs sort items: All, Gear, Use, Other, and Info for full descriptions. "
+            "Select a row, then Use / Equip for potions, keys, buffs, weapons, armor, rings, "
+            "and amulets. Equipped gear raises attack, defense, and agility in combat. "
+            "Use Close inventory or Esc to hide the panel. Remove clears a gear slot without "
+            "using the item. In the world, try take all or pick up all to grab every loose item here.",
         ),
         (
             "Quests and merchants",
@@ -75,10 +104,41 @@ def _how_to_play_lines(body_font: pygame.font.Font, heading_font: pygame.font.Fo
             out.append((tline, True))
         for ln in _wrap_paragraph(body_font, body, text_width):
             out.append((ln, False))
+        if title == "Color key":
+            out.append((LEGEND_MARKER, False))
         out.append(("", False))
     while out and out[-1] == ("", False):
         out.pop()
     return out
+
+
+def _draw_highlight_legend(
+    surface: pygame.Surface,
+    x: int,
+    y: int,
+    max_w: int,
+    body_font: pygame.font.Font,
+    accent: tuple[int, int, int],
+) -> int:
+    """Draw color swatches and labels; return total height used."""
+
+    row_h = 22
+    swatch = LEGEND_SWATCH_SIZE
+    text_x = x + swatch + 10
+    cy = y
+    for color, label, description in legend_rows():
+        swatch_rect = pygame.Rect(x, cy + (row_h - swatch) // 2, swatch, swatch)
+        pygame.draw.rect(surface, color, swatch_rect)
+        pygame.draw.rect(surface, accent, swatch_rect, 1)
+        label_sf = body_font.render(f"{label} — ", True, LABEL_BRIGHT)
+        desc_sf = body_font.render(description, True, LABEL_DIM)
+        surface.blit(label_sf, (text_x, cy + (row_h - label_sf.get_height()) // 2))
+        surface.blit(
+            desc_sf,
+            (text_x + label_sf.get_width(), cy + (row_h - desc_sf.get_height()) // 2),
+        )
+        cy += row_h
+    return cy - y + 8
 
 
 def _help_content_height(
@@ -88,6 +148,9 @@ def _help_content_height(
 ) -> int:
     h = 0
     for text, is_heading in lines:
+        if text == LEGEND_MARKER:
+            h += legend_block_height()
+            continue
         if not text.strip() and not is_heading:
             h += 8
             continue
@@ -267,6 +330,17 @@ class PauseOverlay:
             for text, is_heading in lines:
                 if y > self._help_clip.bottom:
                     break
+                if text == LEGEND_MARKER:
+                    block_h = _draw_highlight_legend(
+                        surface,
+                        x0,
+                        int(y),
+                        max_w,
+                        self.fonts["body"],
+                        self.accent,
+                    )
+                    y += block_h
+                    continue
                 if not text.strip() and not is_heading:
                     y += 8
                     continue

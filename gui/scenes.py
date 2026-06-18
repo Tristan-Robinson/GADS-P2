@@ -21,6 +21,7 @@ from game.models import GameOutcome, GameState
 from game.world import build_initial_state
 from gui.app import TurnResult
 from gui.background import ThemeBackground
+from gui.clipboard import copy_text
 from gui.highlight import Span, highlight
 from gui.inventory_overlay import InventoryOverlay
 from gui.npc_overlays import MerchantOverlay, QuestOfferOverlay
@@ -412,27 +413,47 @@ class GameScene:
         if self._battle_active:
             self.battle_panel.handle_event(event, self.state)
             return
+
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            text = self.narration.finish_pointer(event)
+            if text is not None:
+                if not self.input_box.insert_fragment_at(text, event.pos):
+                    if self.narration.pointer_was_click():
+                        copy_text(text)
+                        self.narration.flash_copied()
+                return
+
         self.narration.handle_event(event)
         submitted = self.input_box.handle_event(event)
         if submitted:
-            if not self.app.worker.submit_turn(self.state, submitted):
-                return
+            self.app.worker.submit_turn(self.state, submitted)
 
     def update(self, dt: float) -> None:
         self.background.update(dt)
         self.input_box.update(dt)
+        self.narration.update(dt)
         self.input_box.set_enabled(
-            not self.app.worker.busy
-            and not self._battle_active
+            not self._battle_active
             and not self._inventory_open
             and not self._pause_open
             and not self._quest_offer_open
             and not self._merchant_open
         )
 
-        turn = self.app.worker.poll()
-        if turn is not None:
+        while True:
+            turn = self.app.worker.poll()
+            if turn is None:
+                break
             self._handle_turn(turn)
+
+        if (
+            not self._battle_active
+            and not self._pause_open
+            and not self._inventory_open
+            and not self._quest_offer_open
+            and not self._merchant_open
+        ):
+            self.narration.update_hover(pygame.mouse.get_pos())
 
         if self.flash_active:
             self.flash_timer += dt
@@ -489,6 +510,27 @@ class GameScene:
         self.narration.append(spans, heading=heading, accent=self.theme.palette[2])
         self.narration.scroll_to_bottom()
 
+        if result is not None:
+            self.state.last_narration = narration_text
+            self._update_suggested_item(narration_text)
+            if result.narration_mode in ("ask", "clarify", "reject", "interact"):
+                self.state.conversation_open = True
+            elif result.battle_pending or (
+                result.success
+                and result.action
+                in {
+                    ActionType.GO,
+                    ActionType.TAKE,
+                    ActionType.ATTACK,
+                    ActionType.USE,
+                    ActionType.CRAFT,
+                    ActionType.COMBINE,
+                    ActionType.TALK,
+                    ActionType.INVENTORY,
+                }
+            ):
+                self.state.conversation_open = False
+
         if result is not None and result.descend:
             self._descend()
             return
@@ -496,11 +538,15 @@ class GameScene:
         if self.state.game_over and self.state.outcome == GameOutcome.DEFEAT:
             self.app.set_scene(GameOverScene(self.app, self.state))
 
-    def _on_battle_choice(self, choice: BattleChoice, spell_id: str | None = None) -> None:
+    def _on_battle_choice(self, choice: BattleChoice, option_id: str | None = None) -> None:
         eid = self.state.pending_battle_enemy_id
         if not eid or not self._battle_active:
             return
-        p = apply_player_turn(self.state, eid, choice, spell_id=spell_id)
+        spell_id = option_id if choice == BattleChoice.SPELL else None
+        improv_id = option_id if choice == BattleChoice.IMPROVISE else None
+        p = apply_player_turn(
+            self.state, eid, choice, spell_id=spell_id, improv_id=improv_id
+        )
         narr_lines: list[str] = []
         for line in p.log_lines:
             self.battle_panel.push_log(line)
@@ -587,6 +633,21 @@ class GameScene:
         )
         self.app.worker.submit_turn(self.state, "look")
 
+    def _update_suggested_item(self, narration_text: str) -> None:
+        room = self.state.current_room()
+        takeables = [item.name for item in room.items if item.takeable]
+        lower = narration_text.lower()
+        mentioned = [name for name in takeables if name.lower() in lower]
+        if not mentioned:
+            return
+        for name in mentioned:
+            nl = name.lower()
+            if f"take {nl}" in lower or f"pick up {nl}" in lower or f"grab {nl}" in lower:
+                self.state.last_suggested_item = name
+                return
+        if len(mentioned) == 1:
+            self.state.last_suggested_item = mentioned[0]
+
     def _heading_for(self, turn: TurnResult) -> str:
         if turn.action is None:
             return "..."
@@ -599,9 +660,19 @@ class GameScene:
     def draw(self, surface: pygame.Surface) -> None:
         self.background.draw(surface)
 
-        self.status_bar.draw(surface, self.state, thinking=self.app.worker.busy)
+        busy = self.app.worker.busy
+        pending = self.app.worker.pending_count
+        self.status_bar.draw(
+            surface, self.state, thinking=busy, pending=pending
+        )
         self.narration.draw(surface)
-        self.input_box.draw(surface, thinking=self.app.worker.busy)
+        input_enabled = self.input_box.enabled
+        self.input_box.draw(
+            surface,
+            thinking=busy and not input_enabled,
+            processing=busy and input_enabled,
+        )
+        self.narration.draw_drag_ghost(surface)
         if self._battle_active:
             self.battle_panel.draw(surface, self.state)
         if not self._pause_open:
@@ -718,7 +789,7 @@ class SettingsScene:
         self.background = ThemeBackground(
             theme_by_name("Dungeon"), app.size, seed=3
         )
-        self.resolutions = list(gui_settings.RESOLUTIONS)
+        self.resolutions = gui_settings.resolution_choices(tuple(app.size))
 
         cx = app.size[0] // 2
         top = max(120, min(160, app.size[1] // 5))

@@ -10,9 +10,13 @@ narrated by a local [Ollama](https://ollama.com/) model.
 - The **game engine** owns rooms, combat resolution, inventory, locked doors,
   NPCs (quest givers, merchants), quests, gold, and defeat logic.
 - **Combat** is a turn-based minigame: typing `attack <enemy>` opens the
-  **Combat** panel on the right with **Attack**, **Defend**, and **Surrender**
-  (heavy self-damage, then the foe stops blocking exits so you can explore).
-  Rounds run on the main UI thread; Ollama is not called for each button press.
+  **Combat** panel with **Attack**, **Defend**, **Improvise** (swing room
+  fixtures), **Spells**, and **Surrender**. Rounds run on the main UI thread;
+  Ollama is not called for each button press.
+- **Environmental play**: randomized room fixtures (`interact <fixture>`),
+  crafting at workstations (`craft <recipe>`), and combining ingredients.
+  Ask questions in plain language; vague commands get a **clarify** reply;
+  impossible ones get a witty **reject** response.
 - **Ollama** maps free-form player input to structured actions and narrates
   outcomes using only facts returned by the engine (narration is skipped when
   the result only opens battle, or opens the quest / merchant UI).
@@ -74,27 +78,41 @@ service before opening the window. Output: `dist/Cryptoriale/` with
 ## Controls
 
 - Type natural commands into the input box at the bottom of the window.
-- **Enter** submits the command.
-- **Up / Down** scroll through your command history.
+- **Enter** submits the command. Chain multiple actions with `;`, a new line, or
+  `then` / `and then` (example: `go north; take torch`).
+- While the AI is thinking, you can still type — the next command **queues**; the
+  status bar shows **AI thinking... (N queued)**.
+- **Click** in the bar to move the cursor; **arrow keys**, **Home**, **End**,
+  **Backspace**, and **Delete** edit text (hold Backspace/Delete to repeat).
+- **Ctrl+C** / **Ctrl+V** copy and paste; **Up / Down** recall command history.
 - **Mouse wheel** or **PgUp / PgDown** scroll the narration panel.
-- **Esc** returns to the title screen (clears an in-progress fight if needed).
-- During combat, use the **Combat** panel on the right; the text box is
-  disabled until the fight ends.
+- **Highlighted keywords** in the story log: **hover** for a label, **drag** into
+  the command bar, **click** to copy, or **right-click** the bar and choose **Paste**.
+- **Esc** opens the pause menu (or returns from How to play / closes overlays).
+- **Pack** opens the inventory overlay; **Pause** opens resume / help / quit.
+- During combat, use the **Combat** panel; the text box is disabled until the fight ends.
 - **Settings** (title screen): resolution grid, **windowed / borderless /
   fullscreen**, auto-equip toggle.
+- Entering a new room automatically includes a **look** survey in the narration.
 
 ### Supported commands (engine)
 
 `look`, `go <direction>`, `take <item>`, **take all**, `use <item>`,
+`interact <fixture>`, `craft <recipe>`, `combine <item> and <item>`,
 `attack <enemy>`, **`talk <name>`**, **`talk quest`**, **`talk merchant`**,
-`inventory`, `help`, `quit`. Equipment uses `use` / **Equip** from the
-inventory overlay. Parser maps natural phrases to this set.
+`inventory`, `help`, `quit`. Separate multiple commands with `;`, a new line,
+or `then` / `and then`. You can also **ask** questions (`what is here?`,
+`where is the key?`) for a conversational answer grounded in the current room.
+Equipment uses `use` / **Equip** from the inventory overlay. Fixtures vary
+each level; the engine still owns all real state changes.
 
 ## Inventory
 
-Open with `inventory` or **Pack** in-game. Tabs: **All**, **Gear**, **Use**,
-**Other**, **Info**; each row shows a short **stat summary** under the name.
-Larger fonts than the main HUD for readability.
+Open with `inventory`, **Pack**, or from the pause **How to play** guide when
+not in combat. Tabs: **All**, **Gear**, **Use**, **Other**, **Info** — each row
+shows a short **stat summary** under the name; **Info** shows full descriptions.
+Larger fonts than the main HUD for readability. Pause → **How to play** documents
+keywords, command chaining, and UI features in detail.
 
 ## Themed levels
 
@@ -111,11 +129,13 @@ stats) is generated per level.
 - `main.py` - entry point that verifies Ollama and launches the Pygame app
 - `config.py` - Ollama host, model, and temperatures
 - `game/` - models, engine, procedural levels, battle, NPC/quest logic
-- `gui/` - Pygame scenes, widgets, inventory, settings, overlays
+- `gui/` - Pygame scenes, widgets, inventory, settings, overlays, clipboard
 - `llm/` - Ollama client, prompts, parser, and narrator
 - `tests/` - engine and combat tests (no LLM)
 - `cryptoriale.spec` - PyInstaller spec for release builds
 - `prompts-used.md` - user-request log (best-effort)
+- `feedback-summary.md` - playtest feedback and implementation status
+- `critical-feedback.md` - reflection on feedback decisions
 - `ollama-plan.md` - model choice, timing, data flow, prompts, and risks
 - `setup.md` - full technical setup guide
 - `refinements-changes.md` - scope and decision log
@@ -124,5 +144,8 @@ stats) is generated per level.
 
 ```bash
 pip install pytest
-python -m pytest tests/
+python -m pytest -q
 ```
+
+108+ tests cover engine, combat, NLP command splitting, clipboard, input bar,
+highlight legend, inventory layout, and worker queue behavior (no LLM required).

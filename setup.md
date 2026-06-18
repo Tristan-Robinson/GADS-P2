@@ -204,10 +204,14 @@ A window titled **Cryptoriale** opens. Press Enter or click **Descend** on the t
 ### In-game controls
 
 - Type natural commands into the input box (`look around`, `go north`, `attack goblin`, `talk quest`, `take all`, `use the iron key`, `inventory`, `quit`).
-- Enter submits a command.
-- Up / Down arrows cycle through your command history.
+- **Enter** submits. Chain commands with `;`, a new line, or `then` / `and then`.
+- While the AI is thinking, additional commands **queue**; the status bar shows how many are waiting.
+- Click to place the cursor; arrow keys, Home, End, Backspace, Delete; Ctrl+C/V; Up/Down for history.
+- Drag highlighted narration keywords into the command bar, or right-click the bar for **Paste**.
 - Mouse wheel or PgUp / PgDown scroll the narration panel.
-- Esc returns to the title screen.
+- **Pack** or `inventory` opens the backpack overlay (tabs, Info descriptions).
+- **Pause** → **How to play** for the full guide including the keyword color legend.
+- Esc opens pause (or closes overlays / returns from help).
 
 ### Demo tips
 
@@ -220,7 +224,7 @@ A window titled **Cryptoriale** opens. Press Enter or click **Descend** on the t
 ## Run engine tests (no LLM required)
 
 ```bash
-python -m pytest tests/test_engine.py
+python -m pytest -q
 ```
 
 If `pytest` is not installed:
@@ -229,7 +233,8 @@ If `pytest` is not installed:
 pip install pytest
 ```
 
-Or import and run the test functions in `tests/test_engine.py` with Python directly.
+Tests cover engine, battle, NLP splitting, GUI clipboard/input, inventory layout,
+and background worker queue behavior — no Ollama or display required for most cases.
 
 ## Troubleshooting
 
@@ -270,6 +275,8 @@ Or import and run the test functions in `tests/test_engine.py` with Python direc
 ## Related documentation
 
 - `README.md` — quick start and repository overview
+- `feedback-summary.md` — playtest feedback summary
+- `critical-feedback.md` — reflection on feedback and implementation choices
 - `prompts-used.md` — best-effort log of user-driven feature requests
 - `ollama-plan.md` — model choice, timing, data flow, prompts, and risks
 - `refinements-changes.md` — scope and implementation decision log

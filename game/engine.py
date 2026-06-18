@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import random
+from dataclasses import dataclass
+from typing import Any
+
 from game.actions import ActionResult, ActionType, PlayerAction
-from game.models import Enemy, Exit, GameOutcome, GameState, Item, ItemKind
+from game.models import Enemy, Exit, GameOutcome, GameState, Item, ItemKind, RoomFeature
+from game.targeting import fuzzy_find_entity, normalize_target_name
 
 
 HELP_TEXT = (
     "Commands include look, go <direction>, take <item>, take all, use <item>, "
+    "interact <fixture>, craft <recipe>, combine <item> and <item>, "
     "attack <enemy>, talk <name>, talk quest, talk merchant (at a stall), inventory, help, and quit. "
-    "Directions accept north / south / east / west or forward / back / left / right."
+    "In combat, use the Improvise button to swing room objects. "
+    "Directions accept north / south / east / west or forward / back / left / right. "
+    "Separate multiple commands with ;, a new line, or then / and then "
+    "(example: go north; take torch)."
 )
 
 
@@ -57,6 +66,9 @@ def apply_action(state: GameState, action: PlayerAction) -> ActionResult:
             ActionType.LOOK,
             ActionType.INVENTORY,
             ActionType.HELP,
+            ActionType.ASK,
+            ActionType.CLARIFY,
+            ActionType.REJECT,
         }
         if action.action not in allowed:
             return _stamp_hp(
@@ -81,6 +93,20 @@ def apply_action(state: GameState, action: PlayerAction) -> ActionResult:
         result = npc_engine.talk(state, action.target)
     elif action.action == ActionType.ATTACK:
         result = begin_attack(state, action.target)
+    elif action.action == ActionType.INTERACT:
+        result = _interact(state, action.target)
+    elif action.action == ActionType.CRAFT:
+        from game import crafting
+
+        result = crafting.try_craft(state, action.target or "")
+    elif action.action == ActionType.COMBINE:
+        result = _combine(state, action.target, action.secondary_target)
+    elif action.action == ActionType.REJECT:
+        result = _reject(state, action.player_intent or "")
+    elif action.action == ActionType.ASK:
+        result = _ask(state, action.player_intent or action.target or "")
+    elif action.action == ActionType.CLARIFY:
+        result = _clarify(state, action.player_intent or "")
     elif action.action == ActionType.INVENTORY:
         result = _inventory(state)
     elif action.action == ActionType.HELP:
@@ -179,11 +205,10 @@ def _stamp_hp(result: ActionResult, state: GameState) -> ActionResult:
     return result
 
 
-_MOVE_VERBS = ("go", "move", "walk", "head", "step", "run", "travel")
-
-
 def parse_fallback(user_input: str) -> PlayerAction | None:
-    text = user_input.strip().lower()
+    from game import nlp
+
+    text = nlp.strip_polite_prefix(user_input)
     if not text:
         return None
 
@@ -193,8 +218,31 @@ def parse_fallback(user_input: str) -> PlayerAction | None:
     if text in {"help", "?"}:
         return PlayerAction(action=ActionType.HELP)
 
-    if text in {"look", "l", "examine"}:
-        return PlayerAction(action=ActionType.LOOK)
+    imperative = nlp.parse_imperative(user_input)
+    if imperative is not None:
+        return imperative
+
+    if text.endswith("?") or text.startswith(
+        (
+            "what ",
+            "where ",
+            "who ",
+            "whom ",
+            "why ",
+            "how ",
+            "when ",
+            "which ",
+            "can i ",
+            "could i ",
+            "do i ",
+            "does ",
+            "is there ",
+            "are there ",
+            "is the ",
+            "are the ",
+        )
+    ):
+        return PlayerAction(action=ActionType.ASK, player_intent=user_input.strip())
 
     if text in {"inventory", "inv", "i"}:
         return PlayerAction(action=ActionType.INVENTORY)
@@ -212,51 +260,21 @@ def parse_fallback(user_input: str) -> PlayerAction | None:
     if text.startswith("talk "):
         return PlayerAction(action=ActionType.TALK, target=text[5:].strip())
 
-    bare = normalize_direction(text)
-    if bare in {"north", "south", "east", "west"}:
-        return PlayerAction(action=ActionType.GO, direction=bare)
+    if text.startswith("interact with "):
+        return PlayerAction(action=ActionType.INTERACT, target=text[14:].strip())
+    if text.startswith("interact "):
+        return PlayerAction(action=ActionType.INTERACT, target=text[9:].strip())
 
-    for verb in _MOVE_VERBS:
-        prefix = verb + " "
-        if text.startswith(prefix):
-            rest = text[len(prefix):].strip()
-            for filler in ("to the ", "to ", "the "):
-                if rest.startswith(filler):
-                    rest = rest[len(filler):].strip()
-                    break
-            normalized = normalize_direction(rest)
-            if normalized:
-                return PlayerAction(action=ActionType.GO, direction=normalized)
+    if text.startswith("craft "):
+        return PlayerAction(action=ActionType.CRAFT, target=text[6:].strip())
 
-    if text in {
-        "take all",
-        "take everything",
-        "pick up all",
-        "pick up everything",
-        "grab all",
-        "grab everything",
-        "loot all",
-        "loot everything",
-    } or text.startswith("take all ") or text.startswith("pick up all "):
-        return PlayerAction(action=ActionType.TAKE, target="__ALL__")
-
-    if text.startswith("take "):
-        return PlayerAction(action=ActionType.TAKE, target=text[5:].strip())
-
-    if text.startswith("pick up "):
-        return PlayerAction(action=ActionType.TAKE, target=text[8:].strip())
-
-    if text.startswith("use "):
-        return PlayerAction(action=ActionType.USE, target=text[4:].strip())
-
-    if text.startswith("equip "):
-        return PlayerAction(action=ActionType.USE, target=text[6:].strip())
-
-    if text.startswith("attack "):
-        return PlayerAction(action=ActionType.ATTACK, target=text[7:].strip())
-
-    if text.startswith("fight "):
-        return PlayerAction(action=ActionType.ATTACK, target=text[6:].strip())
+    if text.startswith("combine ") and " and " in text[8:]:
+        left, right = text[8:].split(" and ", 1)
+        return PlayerAction(
+            action=ActionType.COMBINE,
+            target=left.strip(),
+            secondary_target=right.strip(),
+        )
 
     return None
 
@@ -266,7 +284,8 @@ def _look(state: GameState) -> ActionResult:
     exit_labels = _exit_labels(room.exits)
     visible_enemies = [enemy.name for enemy in state.visible_enemies()]
     backing = [e.name for e in state.visible_enemies() if e.backing_off]
-    visible_items = [item.name for item in room.items]
+    visible_items = [item.name for item in room.items if item.takeable]
+    visible_features = [feat.name for feat in state.visible_features()]
 
     parts: list[str] = [f"You are in the {room.name}."]
     if room.description:
@@ -279,6 +298,8 @@ def _look(state: GameState) -> ActionResult:
             parts.append(
                 "At a distance: " + ", ".join(backing) + " (they are not blocking exits)."
             )
+    if visible_features:
+        parts.append("Notable fixtures: " + ", ".join(visible_features) + ".")
     if visible_items:
         parts.append("You see " + ", ".join(visible_items) + ".")
     npcs = room.npcs
@@ -296,9 +317,188 @@ def _look(state: GameState) -> ActionResult:
         room_name=room.name,
         room_description=room.description,
         visible_items=visible_items,
+        visible_features=visible_features,
         visible_enemies=visible_enemies,
         exits=exit_labels,
         inventory=[item.name for item in state.player.inventory],
+    )
+
+
+@dataclass
+class _InteractMatch:
+    kind: str
+    entity: Any
+    display_name: str
+
+
+def _resolve_interact_target(state: GameState, target: str) -> _InteractMatch | None:
+    room = state.current_room()
+
+    feat_candidates = [
+        (f.id, f.name, f)
+        for f in room.features
+        if not f.used and f.interactable
+    ]
+    feat = fuzzy_find_entity(target, feat_candidates)
+    if feat is not None:
+        return _InteractMatch("fixture", feat, feat.name)
+
+    item_candidates = [
+        (i.id, i.name, i) for i in room.items if i.takeable
+    ]
+    item = fuzzy_find_entity(target, item_candidates)
+    if item is not None:
+        return _InteractMatch("item", item, item.name)
+
+    npc_candidates = [(n.id, n.name, n) for n in room.npcs]
+    npc = fuzzy_find_entity(target, npc_candidates)
+    if npc is not None:
+        return _InteractMatch("npc", npc, npc.name)
+
+    enemy_candidates = [
+        (e.id, e.name, e) for e in state.visible_enemies()
+    ]
+    enemy = fuzzy_find_entity(target, enemy_candidates)
+    if enemy is not None:
+        return _InteractMatch("enemy", enemy, enemy.name)
+
+    normalized = normalize_target_name(target)
+    if normalized and normalized in state.room_facts_summary().lower():
+        return _InteractMatch("scenery", None, target.strip())
+
+    return None
+
+
+def _interact_result_context(state: GameState) -> dict:
+    room = state.current_room()
+    return {
+        "room_name": room.name,
+        "room_description": room.description,
+        "visible_items": [i.name for i in room.items if i.takeable],
+        "visible_features": [f.name for f in state.visible_features()],
+        "visible_enemies": [e.name for e in state.visible_enemies()],
+        "exits": _exit_labels(room.exits),
+        "inventory": [i.name for i in state.player.inventory],
+    }
+
+
+def _interact(state: GameState, target: str | None) -> ActionResult:
+    from game import interactions
+
+    if not target:
+        return _failure(ActionType.INTERACT, "Interact with what?")
+
+    room = state.current_room()
+    match = _resolve_interact_target(state, target)
+    if match is None:
+        return _failure(
+            ActionType.INTERACT,
+            f"You do not see {target} to interact with.",
+            room=room,
+            state=state,
+        )
+
+    flavor_seed = random.randint(0, 9999)
+
+    if match.kind == "fixture":
+        feat = match.entity
+        message = feat.description
+        if feat.crafting_station:
+            from game import crafting
+
+            names = [r.name for r in crafting.available_recipes(state)]
+            if names:
+                message += f" You could craft: {', '.join(names)}."
+            else:
+                message += " It looks like a workstation—bring ingredients if you have any."
+        elif feat.name == "suspicious stain":
+            message += " It smells faintly of monster goop. Nothing more to squeeze out."
+    elif match.kind == "item":
+        message = interactions.pick_flavor("item", match.display_name, flavor_seed)
+    elif match.kind == "npc":
+        message = interactions.pick_flavor("npc", match.display_name, flavor_seed)
+        message += f" If you want to chat, try talk {match.display_name}."
+    elif match.kind == "enemy":
+        message = interactions.pick_flavor("enemy", match.display_name, flavor_seed)
+    else:
+        message = interactions.pick_flavor("scenery", match.display_name, flavor_seed)
+
+    return ActionResult(
+        success=True,
+        action=ActionType.INTERACT,
+        message=message,
+        narration_mode="interact",
+        interaction_kind=match.kind,
+        interaction_target=match.display_name,
+        flavor_seed=flavor_seed,
+        **_interact_result_context(state),
+    )
+
+
+def _combine(
+    state: GameState, target: str | None, secondary: str | None
+) -> ActionResult:
+    if not target or not secondary:
+        return _failure(ActionType.COMBINE, "Combine what with what?")
+
+    from game import crafting
+
+    recipe = crafting.find_recipe_for_combine(state, target, secondary)
+    if recipe is None:
+        room = state.current_room()
+        return _failure(
+            ActionType.COMBINE,
+            f"Nothing useful happens when you combine {target} and {secondary}.",
+            room=room,
+            state=state,
+        )
+    return crafting.try_craft(state, recipe.id)
+
+
+def _room_context_fields(state: GameState) -> dict:
+    room = state.current_room()
+    return {
+        "room_name": room.name,
+        "room_description": room.description,
+        "visible_items": [i.name for i in room.items if i.takeable],
+        "visible_features": [f.name for f in state.visible_features()],
+        "visible_enemies": [e.name for e in state.visible_enemies()],
+        "exits": _exit_labels(room.exits),
+        "inventory": [i.name for i in state.player.inventory],
+    }
+
+
+def _reject(state: GameState, intent: str) -> ActionResult:
+    return ActionResult(
+        success=False,
+        action=ActionType.REJECT,
+        message="That cannot be done.",
+        rejection=True,
+        narration_mode="reject",
+        player_intent=intent,
+        **_room_context_fields(state),
+    )
+
+
+def _ask(state: GameState, question: str) -> ActionResult:
+    return ActionResult(
+        success=True,
+        action=ActionType.ASK,
+        message="You pause to consider the vault.",
+        narration_mode="ask",
+        player_intent=question,
+        **_room_context_fields(state),
+    )
+
+
+def _clarify(state: GameState, intent: str) -> ActionResult:
+    return ActionResult(
+        success=False,
+        action=ActionType.CLARIFY,
+        message="You are not sure how to do that.",
+        narration_mode="clarify",
+        player_intent=intent,
+        **_room_context_fields(state),
     )
 
 
@@ -337,7 +537,8 @@ def _go(state: GameState, direction: str | None) -> ActionResult:
     state.current_room_id = exit_.target_room_id
     destination = state.current_room()
 
-    result = _look(state)
+    look_result = _look(state)
+    result = look_result
     result.action = ActionType.GO
     result.success = True
     if destination.is_exit:
@@ -347,7 +548,9 @@ def _go(state: GameState, direction: str | None) -> ActionResult:
         )
         result.descend = True
     else:
-        result.message = f"You move {exit_.direction} into the {destination.name}."
+        movement = f"You move {exit_.direction} into the {destination.name}."
+        result.narration_mode = "look"
+        result.message = f"{movement} {look_result.message}"
     return result
 
 
@@ -378,7 +581,7 @@ def _auto_equip_from_pickup(state: GameState, item: Item) -> str:
 
 def _take_all(state: GameState) -> ActionResult:
     room = state.current_room()
-    pile = list(room.items)
+    pile = [item for item in room.items if item.takeable]
     if not pile:
         return _failure(
             ActionType.TAKE,
@@ -410,16 +613,28 @@ def _take(state: GameState, target: str | None) -> ActionResult:
     if not target:
         return _failure(ActionType.TAKE, "Take what?")
 
-    tkey = target.strip().lower()
+    tkey = normalize_target_name(target or "")
     if tkey in {"__all__", "all", "everything", "*"}:
         return _take_all(state)
 
+    resolved = target or ""
+    if tkey in {"it", "that", "this"} and state.last_suggested_item:
+        resolved = state.last_suggested_item
+
     room = state.current_room()
-    item = _find_item(room.items, target)
+    item = _find_item(room.items, resolved)
     if item is None:
         return _failure(
             ActionType.TAKE,
             f"You do not see {target} here.",
+            room=room,
+            state=state,
+        )
+
+    if not item.takeable:
+        return _failure(
+            ActionType.TAKE,
+            f"The {item.name} is fixed in place.",
             room=room,
             state=state,
         )
@@ -680,27 +895,32 @@ def _find_locked_exit(exits: list[Exit], key_id: str) -> Exit | None:
 
 
 def _find_item(items: list[Item], target: str) -> Item | None:
-    normalized = target.strip().lower()
-    for item in items:
-        if item.id.lower() == normalized or item.name.lower() == normalized:
-            return item
-    return None
+    candidates = [(item.id, item.name, item) for item in items]
+    return fuzzy_find_entity(target, candidates)
 
 
 def _find_inventory_item(state: GameState, target: str) -> Item | None:
-    normalized = target.strip().lower()
-    for item in state.player.inventory:
-        if item.id.lower() == normalized or item.name.lower() == normalized:
-            return item
-    return None
+    if not target:
+        return None
+    pronoun = normalize_target_name(target)
+    if pronoun in {"it", "that", "this"} and state.last_suggested_item:
+        target = state.last_suggested_item
+    candidates = [(item.id, item.name, item) for item in state.player.inventory]
+    return fuzzy_find_entity(target, candidates)
 
 
 def _find_enemy(enemies: list[Enemy], target: str) -> Enemy | None:
-    normalized = target.strip().lower()
-    for enemy in enemies:
-        if enemy.id.lower() == normalized or enemy.name.lower() == normalized:
-            return enemy
-    return None
+    candidates = [(enemy.id, enemy.name, enemy) for enemy in enemies]
+    return fuzzy_find_entity(target, candidates)
+
+
+def _find_feature(features: list[RoomFeature], target: str) -> RoomFeature | None:
+    candidates = [
+        (feat.id, feat.name, feat)
+        for feat in features
+        if not feat.used
+    ]
+    return fuzzy_find_entity(target, candidates)
 
 
 def _player_has_item(state: GameState, item_id: str | None) -> bool:

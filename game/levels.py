@@ -14,7 +14,18 @@ import random
 import copy
 from dataclasses import dataclass
 
-from game.models import Enemy, Exit, GameOutcome, GameState, Item, ItemKind, Player, Room, RoomNPC
+from game.models import (
+    Enemy,
+    Exit,
+    GameOutcome,
+    GameState,
+    Item,
+    ItemKind,
+    Player,
+    Room,
+    RoomFeature,
+    RoomNPC,
+)
 
 
 KEY_ID = "iron_key"
@@ -38,6 +49,8 @@ class ItemTemplate:
     agility_bonus: int = 0
     armor_bonus: int = 0
     defense_bonus: int = 0
+    material_tag: str = ""
+    gold_value: int = 0
 
 
 @dataclass(frozen=True)
@@ -139,7 +152,12 @@ CAVERN = LevelTheme(
         ItemTemplate("potion", "spring elixir", "Cool water bottled from a glowing pool.", True, True, 10),
     ),
     trinkets=(
-        ItemTemplate("shard", "crystal shard", "A shard of cave crystal, faintly warm."),
+        ItemTemplate(
+            "shard",
+            "crystal shard",
+            "A shard of cave crystal, faintly warm.",
+            material_tag="shard",
+        ),
     ),
     key_name="crystal key",
     key_description="A key cut from a single piece of glowing crystal.",
@@ -165,7 +183,12 @@ HELLFORGE = LevelTheme(
         ItemTemplate("potion", "ember tonic", "A flask of glowing red that warms the throat.", True, True, 10),
     ),
     trinkets=(
-        ItemTemplate("ingot", "iron ingot", "A still-warm ingot of forge iron."),
+        ItemTemplate(
+            "ingot",
+            "iron ingot",
+            "A still-warm ingot of forge iron.",
+            material_tag="ingot",
+        ),
     ),
     key_name="ember key",
     key_description="A key forged from blackened iron, its bow still glowing.",
@@ -248,10 +271,24 @@ def _scale_enemy(template: EnemyTemplate, depth: int) -> Enemy:
     )
 
 
-def _instantiate(template: ItemTemplate) -> Item:
+def _instantiate(template: ItemTemplate, *, depth: int = 1) -> Item:
+    from game.economy import default_gold_value
+
     kind = template.kind
     if template.heal_amount > 0 and template.consumable and kind == ItemKind.MISC:
         kind = ItemKind.POTION
+    gold = template.gold_value or default_gold_value(
+        kind=kind,
+        heal_amount=template.heal_amount,
+        weapon_damage=template.weapon_damage,
+        defense_bonus=template.defense_bonus,
+        armor_bonus=template.armor_bonus,
+        strength_bonus=template.strength_bonus,
+        agility_bonus=template.agility_bonus,
+        material_tag=template.material_tag,
+    )
+    if depth > 1 and kind == ItemKind.POTION:
+        gold = max(gold, 6 + depth)
     return Item(
         id=template.id,
         name=template.name,
@@ -266,7 +303,137 @@ def _instantiate(template: ItemTemplate) -> Item:
         agility_bonus=template.agility_bonus,
         armor_bonus=template.armor_bonus,
         defense_bonus=template.defense_bonus,
+        material_tag=template.material_tag,
+        gold_value=gold,
     )
+
+
+@dataclass(frozen=True)
+class FeatureTemplate:
+    name: str
+    description: str
+    interactable: bool = True
+    improvised_weapon: bool = False
+    improv_damage: int = 0
+    crafting_station: bool = False
+    station_tag: str = ""
+    themes: tuple[str, ...] = ()
+
+
+def _ft(
+    name: str,
+    description: str,
+    *,
+    improvised_weapon: bool = False,
+    improv_damage: int = 0,
+    crafting_station: bool = False,
+    station_tag: str = "",
+    themes: tuple[str, ...] = (),
+) -> FeatureTemplate:
+    return FeatureTemplate(
+        name=name,
+        description=description,
+        improvised_weapon=improvised_weapon,
+        improv_damage=improv_damage,
+        crafting_station=crafting_station,
+        station_tag=station_tag,
+        themes=themes,
+    )
+
+
+FEATURE_POOL: tuple[FeatureTemplate, ...] = (
+    # Entrance fixtures
+    _ft("wall sconce", "An iron sconce holds a half-melted torch.", improvised_weapon=True, improv_damage=4, themes=("Dungeon", "Crypt")),
+    _ft("suspicious stain", "A dark stain on the floor might be ichor—or yesterday's stew.", themes=("Dungeon", "Sewer")),
+    _ft("mossy crate", "A waterlogged crate leaks splinters when prodded.", improvised_weapon=True, improv_damage=3, themes=("Cavern", "Sewer")),
+    _ft("brazier stand", "A cold brazier on a tripod could be tipped.", improvised_weapon=True, improv_damage=5, themes=("Hellforge", "Dungeon")),
+    _ft("crumbling statue", "A headless statue's arm might break off.", improvised_weapon=True, improv_damage=4, themes=("Crypt", "Cavern")),
+    _ft("rope hoist", "A frayed rope and pulley creak overhead.", themes=("Dungeon", "Hellforge")),
+    _ft("dripping pipe", "Condensation pools beneath a rusted pipe.", themes=("Sewer", "Cavern")),
+    _ft("frosted niche", "A niche holds a crust of ancient ice.", themes=("Iceglade",)),
+    _ft("bone pile", "Yellowed bones are heaped in a corner.", improvised_weapon=True, improv_damage=3, themes=("Crypt",)),
+    # Hall fixtures
+    _ft("brewing shelf", "Cracked glassware and dried herbs clutter a shelving unit.", crafting_station=True, station_tag="brewing_shelf", themes=("Dungeon", "Crypt", "Sewer")),
+    _ft("loose chain rack", "Chains hang from a rack; one length looks wieldable.", improvised_weapon=True, improv_damage=5, themes=("Dungeon", "Hellforge")),
+    _ft("collapsed pillar", "A fallen column offers a heavy stone chunk.", improvised_weapon=True, improv_damage=6, themes=("Crypt", "Cavern")),
+    _ft("altar slab", "A stained altar slab hums with old rites.", themes=("Crypt",)),
+    _ft("scrying bowl", "A chipped bowl still holds murky water.", themes=("Cavern", "Iceglade")),
+    _ft("iron brazier", "Embers gutter in a hall brazier.", improvised_weapon=True, improv_damage=4, themes=("Hellforge",)),
+    _ft("herb drying rack", "Bundles of herbs hang from twine.", crafting_station=True, station_tag="brewing_shelf", themes=("Cavern", "Iceglade")),
+    _ft("sewer grate", "A heavy grate covers a reeking shaft.", themes=("Sewer",)),
+    _ft("frozen banner", "A stiff banner could be used as a club.", improvised_weapon=True, improv_damage=4, themes=("Iceglade",)),
+    # Armory / chamber fixtures
+    _ft("weapon rack", "Empty hooks and one bent spear haft jut from the rack.", improvised_weapon=True, improv_damage=6, themes=("Dungeon", "Crypt", "Hellforge")),
+    _ft("forge anvil", "A cold anvil stained with old slag.", crafting_station=True, station_tag="forge_anvil", themes=("Hellforge", "Dungeon")),
+    _ft("grinding wheel", "A cracked wheel still turns with a screech.", improvised_weapon=True, improv_damage=5, themes=("Hellforge",)),
+    _ft("oil barrel", "A leaking barrel smells of lamp oil.", improvised_weapon=True, improv_damage=4, themes=("Dungeon", "Sewer")),
+    _ft("torture chair", "An iron chair with manacles rusted shut.", themes=("Crypt",)),
+    _ft("crystal spire", "A jagged crystal growth juts from the floor.", improvised_weapon=True, improv_damage=5, themes=("Cavern",)),
+    _ft("slag heap", "Cooling slag forms brittle shards.", crafting_station=True, station_tag="forge_anvil", themes=("Hellforge",)),
+    _ft("ice rack", "Weapons are frozen into a rack of rime.", improvised_weapon=True, improv_damage=5, themes=("Iceglade",)),
+    _ft("rusty cage", "A bent cage door hangs from one hinge.", improvised_weapon=True, improv_damage=5, themes=("Sewer", "Crypt")),
+)
+
+
+def _pool_for_room(room_id: str) -> tuple[FeatureTemplate, ...]:
+    if room_id == "entrance":
+        names = {
+            "wall sconce", "suspicious stain", "mossy crate", "brazier stand",
+            "crumbling statue", "rope hoist", "dripping pipe", "frosted niche", "bone pile",
+        }
+    elif room_id == "hall":
+        names = {
+            "brewing shelf", "loose chain rack", "collapsed pillar", "altar slab",
+            "scrying bowl", "iron brazier", "herb drying rack", "sewer grate", "frozen banner",
+        }
+    else:
+        names = {
+            "weapon rack", "forge anvil", "grinding wheel", "oil barrel",
+            "torture chair", "crystal spire", "slag heap", "ice rack", "rusty cage",
+        }
+    return tuple(t for t in FEATURE_POOL if t.name in names)
+
+
+def _instantiate_feature(slug: str, room_id: str, idx: int, tmpl: FeatureTemplate) -> RoomFeature:
+    key = tmpl.name.lower().replace(" ", "_")
+    return RoomFeature(
+        id=f"{slug}_{room_id}_{key}_{idx}",
+        name=tmpl.name,
+        description=tmpl.description,
+        interactable=tmpl.interactable,
+        improvised_weapon=tmpl.improvised_weapon,
+        improv_damage=tmpl.improv_damage,
+        crafting_station=tmpl.crafting_station,
+        station_tag=tmpl.station_tag,
+    )
+
+
+def _roll_room_features(
+    theme: LevelTheme,
+    room_id: str,
+    rng: random.Random,
+    depth: int,
+) -> list[RoomFeature]:
+    slug = theme.name.lower().replace(" ", "_")
+    pool = [t for t in _pool_for_room(room_id) if not t.themes or theme.name in t.themes]
+    if not pool:
+        pool = list(_pool_for_room(room_id))
+
+    if depth >= 2:
+        stations = [t for t in pool if t.crafting_station]
+        others = [t for t in pool if not t.crafting_station]
+        weighted: list[FeatureTemplate] = []
+        for t in stations:
+            weighted.extend([t] * 2)
+        weighted.extend(others)
+        pool = weighted or pool
+
+    count = rng.choices([0, 1, 2], weights=[30, 50, 20])[0]
+    if count == 0 or not pool:
+        return []
+
+    picked = rng.sample(pool, k=min(count, len(pool)))
+    return [_instantiate_feature(slug, room_id, i, tmpl) for i, tmpl in enumerate(picked)]
 
 
 def _distribute_budget(rng: random.Random, budget: int) -> tuple[int, int, int]:
@@ -287,6 +454,8 @@ def _distribute_budget(rng: random.Random, budget: int) -> tuple[int, int, int]:
 def _roll_ring(
     rng: random.Random, slug: str, theme_name: str, *, force_first: bool, id_suffix: str = "signet"
 ) -> Item:
+    from game.economy import default_gold_value
+
     if force_first:
         return Item(
             id=f"{slug}_{id_suffix}",
@@ -296,6 +465,9 @@ def _roll_ring(
             kind=ItemKind.RING,
             strength_bonus=1,
             armor_bonus=1,
+            gold_value=default_gold_value(
+                kind=ItemKind.RING, strength_bonus=1, armor_bonus=1
+            ),
         )
     rid = rng.randrange(1, 10**9)
     budget = rng.randint(2, 5)
@@ -321,12 +493,20 @@ def _roll_ring(
         strength_bonus=str_b,
         agility_bonus=agi_b,
         armor_bonus=arm_b,
+        gold_value=default_gold_value(
+            kind=ItemKind.RING,
+            strength_bonus=str_b,
+            agility_bonus=agi_b,
+            armor_bonus=arm_b,
+        ),
     )
 
 
 def _roll_amulet(
     rng: random.Random, slug: str, theme_name: str, *, force_first: bool, id_suffix: str = "charm"
 ) -> Item:
+    from game.economy import default_gold_value
+
     if force_first:
         return Item(
             id=f"{slug}_{id_suffix}",
@@ -337,6 +517,12 @@ def _roll_amulet(
             agility_bonus=1,
             strength_bonus=1,
             armor_bonus=1,
+            gold_value=default_gold_value(
+                kind=ItemKind.AMULET,
+                agility_bonus=1,
+                strength_bonus=1,
+                armor_bonus=1,
+            ),
         )
     rid = rng.randrange(1, 10**9)
     budget = rng.randint(2, 5)
@@ -362,6 +548,12 @@ def _roll_amulet(
         strength_bonus=str_b,
         agility_bonus=agi_b,
         armor_bonus=arm_b,
+        gold_value=default_gold_value(
+            kind=ItemKind.AMULET,
+            strength_bonus=str_b,
+            agility_bonus=agi_b,
+            armor_bonus=arm_b,
+        ),
     )
 
 
@@ -399,6 +591,8 @@ def _depth_extra_loot(
 
     slug = theme.name.lower().replace(" ", "_")
     wd = 2 + min(4, depth // 2)
+    from game.economy import default_gold_value
+
     weapon = Item(
         id=f"{slug}_blade",
         name=f"{theme.name} scavenger blade",
@@ -406,6 +600,7 @@ def _depth_extra_loot(
         usable=True,
         kind=ItemKind.WEAPON,
         weapon_damage=wd,
+        gold_value=default_gold_value(kind=ItemKind.WEAPON, weapon_damage=wd),
     )
     buff = Item(
         id=f"{slug}_vitae",
@@ -419,6 +614,7 @@ def _depth_extra_loot(
         strength_bonus=1,
         agility_bonus=1,
         armor_bonus=1,
+        gold_value=default_gold_value(kind=ItemKind.BUFF),
     )
     db = 2 + min(4, depth // 2)
     armor = Item(
@@ -429,6 +625,9 @@ def _depth_extra_loot(
         kind=ItemKind.ARMOR,
         defense_bonus=db,
         armor_bonus=1,
+        gold_value=default_gold_value(
+            kind=ItemKind.ARMOR, defense_bonus=db, armor_bonus=1
+        ),
     )
     ring = _roll_ring(rng, slug, theme.name, force_first=force_first)
     amulet = _roll_amulet(rng, slug, theme.name, force_first=force_first)
@@ -436,12 +635,15 @@ def _depth_extra_loot(
 
 
 def _key_item(theme: LevelTheme) -> Item:
+    from game.economy import default_gold_value
+
     return Item(
         id=KEY_ID,
         name=theme.key_name,
         description=theme.key_description,
         usable=True,
         kind=ItemKind.KEY,
+        gold_value=default_gold_value(kind=ItemKind.KEY),
     )
 
 
@@ -517,8 +719,8 @@ def generate_level(
         return pool[0] if force_first else rng.choice(pool)
 
     hall_enemy = _scale_enemy(pick(chosen.enemies), depth)
-    trinket = _instantiate(pick(chosen.trinkets))
-    potion = _instantiate(pick(chosen.potions))
+    trinket = _instantiate(pick(chosen.trinkets), depth=depth)
+    potion = _instantiate(pick(chosen.potions), depth=depth)
     key = _key_item(chosen)
     slug = chosen.name.lower().replace(" ", "_")
 
@@ -538,17 +740,28 @@ def generate_level(
         Item(
             id=f"{slug}_ichor",
             name="coagulated ichor",
-            description="Monster residue that can be drunk in a pinch.",
+            description="Monster residue that can be drunk in a pinch—or brewed.",
             usable=True,
             consumable=True,
             heal_amount=4,
             kind=ItemKind.POTION,
             gold_value=4,
+            material_tag="ichor",
         )
     ]
 
+    from game.economy import default_gold_value
+
+    glass_vial = Item(
+        id=f"{slug}_glass_vial",
+        name="empty glass vial",
+        description="A clean vial waiting to be filled.",
+        material_tag="vial",
+        gold_value=default_gold_value(material_tag="vial"),
+    )
+
     entrance_items: list[Item] = [trinket]
-    hall_items: list[Item] = [potion]
+    hall_items: list[Item] = [potion, glass_vial]
     armory_items: list[Item] = [key]
     if depth >= 2:
         extra_weapon, extra_buff, extra_armor, extra_ring, extra_amulet = _depth_extra_loot(
@@ -709,6 +922,7 @@ def generate_level(
             exits=[Exit(direction=ex["entrance_to_hall"], target_room_id="hall")],
             items=entrance_items,
             npcs=entrance_npcs,
+            features=_roll_room_features(chosen, "entrance", rng, depth),
         ),
         "hall": Room(
             id="hall",
@@ -727,6 +941,7 @@ def generate_level(
             items=hall_items,
             enemies=[hall_enemy],
             npcs=hall_npcs,
+            features=_roll_room_features(chosen, "hall", rng, depth),
         ),
         "armory": Room(
             id="armory",
@@ -736,6 +951,7 @@ def generate_level(
             items=armory_items,
             enemies=chamber_enemies,
             npcs=armory_npcs,
+            features=_roll_room_features(chosen, "armory", rng, depth),
         ),
         "vault": Room(
             id="vault",
@@ -790,5 +1006,6 @@ def next_level(state: GameState, rng: random.Random | None = None) -> LevelTheme
     state.outcome = GameOutcome.NONE
     state.active_quests.clear()
     state.declined_quest_npc_ids.clear()
+    state.completed_quest_npc_ids.clear()
     state.draft_quest_offer = None
     return theme

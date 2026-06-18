@@ -13,7 +13,11 @@ from game.models import GameState, Item, ItemKind
 from gui.highlight import Color
 from gui.widgets import LABEL_BRIGHT, LABEL_DIM, Button, draw_panel, fit_text
 
-ROW_H = 44
+ROW_H = 68
+ROW_GAP = 8
+ROW_STRIDE = ROW_H + ROW_GAP
+ROW_PAD_Y = 8
+NAME_SUMMARY_GAP = 6
 
 _TAB_DEFS: tuple[tuple[str, str], ...] = (
     ("all", "All"),
@@ -27,6 +31,25 @@ _GEAR_KINDS = frozenset(
     {ItemKind.WEAPON, ItemKind.ARMOR, ItemKind.RING, ItemKind.AMULET}
 )
 _USE_KINDS = frozenset({ItemKind.POTION, ItemKind.BUFF, ItemKind.SPELL})
+
+
+def _row_rect(list_rect: pygame.Rect, index: int) -> pygame.Rect:
+    return pygame.Rect(
+        list_rect.left,
+        list_rect.top + index * ROW_STRIDE,
+        list_rect.width,
+        ROW_H,
+    )
+
+
+def _row_index_from_click(list_rect: pygame.Rect, click_y: int) -> int | None:
+    local_y = click_y - list_rect.top
+    if local_y < 0:
+        return None
+    row = local_y // ROW_STRIDE
+    if local_y % ROW_STRIDE >= ROW_H:
+        return None
+    return row
 
 
 def _sorted_inventory(state: GameState) -> list[Item]:
@@ -128,8 +151,11 @@ def _item_one_line_summary(item: Item) -> str:
         return "Unlocks matching doors"
     if k == ItemKind.SPELL and item.spell_grant_id:
         return f"Teaches spell ({item.spell_grant_id})"
-    if item.gold_value > 0:
-        return f"Sell value ~{item.gold_value} gold"
+    from game.economy import sell_value
+
+    price = sell_value(item)
+    if price > 0:
+        return f"Sell value ~{price} gold"
     return (item.description or "")[:72] + ("…" if len(item.description or "") > 72 else "")
 
 
@@ -263,7 +289,7 @@ class InventoryOverlay:
         notif_h = 42
         list_bottom = self._panel_rect.bottom - inner - footer_h - notif_h - 10
         self._list_rect = pygame.Rect(x0, list_top, left_w, max(ROW_H, list_bottom - list_top))
-        self._max_rows = max(1, self._list_rect.height // ROW_H)
+        self._max_rows = max(1, self._list_rect.height // ROW_STRIDE)
 
         self._notif_rect = pygame.Rect(x0, list_bottom + 4, left_w, notif_h)
 
@@ -356,7 +382,9 @@ class InventoryOverlay:
                 return engine.unequip_slot(state, slot)
 
         if self._category_tab != "info" and self._list_rect.collidepoint(event.pos):
-            row = (event.pos[1] - self._list_rect.top) // ROW_H
+            row = _row_index_from_click(self._list_rect, event.pos[1])
+            if row is None:
+                return None
             idx = self._scroll + row
             if 0 <= idx < len(filtered):
                 if self._sel != idx:
@@ -457,12 +485,7 @@ class InventoryOverlay:
                 if idx >= len(filtered):
                     break
                 item = filtered[idx]
-                row_rect = pygame.Rect(
-                    self._list_rect.left,
-                    self._list_rect.top + i * ROW_H,
-                    self._list_rect.width,
-                    ROW_H,
-                )
+                row_rect = _row_rect(self._list_rect, i)
                 if idx == self._sel:
                     sel_surf = pygame.Surface(row_rect.size, pygame.SRCALPHA)
                     sel_surf.fill((*self.accent[:3], 35))
@@ -470,16 +493,19 @@ class InventoryOverlay:
                     pygame.draw.rect(surface, self.accent, row_rect, 1, border_radius=6)
 
                 tag = self.fonts["label"].render(_kind_label(item.kind), True, LABEL_DIM)
-                surface.blit(tag, (row_rect.left + 4, row_rect.top + 4))
+                surface.blit(tag, (row_rect.left + 6, row_rect.top + ROW_PAD_Y))
                 name_x = row_rect.left + 50
                 name_w = row_rect.width - 54
                 name_line = fit_text(self.fonts["body"], item.name, name_w)
                 name_sf = self.fonts["body"].render(name_line, True, LABEL_BRIGHT)
-                surface.blit(name_sf, (name_x, row_rect.top + 4))
+                surface.blit(name_sf, (name_x, row_rect.top + ROW_PAD_Y))
                 sub = _item_one_line_summary(item)
                 sub_fit = fit_text(cap_font, sub, name_w)
                 sub_sf = cap_font.render(sub_fit, True, LABEL_DIM)
-                surface.blit(sub_sf, (name_x, row_rect.top + 6 + name_sf.get_height()))
+                surface.blit(
+                    sub_sf,
+                    (name_x, row_rect.top + ROW_PAD_Y + name_sf.get_height() + NAME_SUMMARY_GAP),
+                )
         else:
             clip = surface.get_clip()
             surface.set_clip(self._list_rect)

@@ -33,6 +33,35 @@ DAMAGE: Color = (255, 235, 120)
 LOCK: Color = (220, 170, 255)
 ROOM: Color = (255, 255, 255)
 
+LEGEND_MARKER = "__LEGEND__"
+LEGEND_ROW_HEIGHT = 22
+LEGEND_BLOCK_PADDING = 8
+
+HIGHLIGHT_LEGEND: tuple[tuple[Color, str, str], ...] = (
+    (ENEMY, "Enemy", "Hostile creature in the room."),
+    (ITEM, "Room item", "Takeable item on the floor."),
+    (INVENTORY, "Inventory item", "Something you are carrying."),
+    (DIRECTION, "Direction / exit", "Movement or doorway."),
+    (DAMAGE, "Combat / HP", "Health, damage, or combat terms."),
+    (LOCK, "Lock / key", "Locked exits or keys."),
+    (ROOM, "Room name", "A chamber in the dungeon."),
+)
+
+
+def legend_rows() -> list[tuple[Color, str, str]]:
+    return list(HIGHLIGHT_LEGEND)
+
+
+def label_for_color(color: Color) -> str | None:
+    for entry_color, label, _description in HIGHLIGHT_LEGEND:
+        if entry_color == color:
+            return label
+    return None
+
+
+def legend_block_height() -> int:
+    return len(HIGHLIGHT_LEGEND) * LEGEND_ROW_HEIGHT + LEGEND_BLOCK_PADDING
+
 
 DIRECTION_WORDS: tuple[str, ...] = (
     "north",

@@ -12,6 +12,12 @@ class ParsedActionType(str, Enum):
     USE = "use"
     ATTACK = "attack"
     TALK = "talk"
+    INTERACT = "interact"
+    CRAFT = "craft"
+    COMBINE = "combine"
+    ASK = "ask"
+    CLARIFY = "clarify"
+    REJECT = "reject"
     INVENTORY = "inventory"
     HELP = "help"
     QUIT = "quit"
@@ -21,6 +27,7 @@ class ParsedPlayerAction(BaseModel):
     action: ParsedActionType
     direction: str | None = None
     target: str | None = None
+    secondary_target: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 

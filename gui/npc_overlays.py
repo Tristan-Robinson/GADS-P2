@@ -255,7 +255,9 @@ class MerchantOverlay:
             row = pygame.Rect(self._list_left.left, y, self._list_left.width, self._row_h - 2)
             if self._sel_sell == i:
                 pygame.draw.rect(surface, (*self._accent[:3], 40), row, border_radius=6)
-            price = max(1, (it.gold_value if it.gold_value > 0 else 3) // 2)
+            from game.economy import sell_value
+
+            price = sell_value(it)
             line = fit_text(self.fonts["body"], f"{it.name}  (sell ~{price}g)", self._list_left.width - 8)
             sf = self.fonts["body"].render(line, True, LABEL_BRIGHT)
             surface.blit(sf, (row.left + 4, row.centery - sf.get_height() // 2))

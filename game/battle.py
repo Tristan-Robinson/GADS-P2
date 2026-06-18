@@ -14,7 +14,7 @@ import copy
 from dataclasses import dataclass, field
 from enum import Enum
 
-from game.models import Enemy, GameOutcome, GameState, Item
+from game.models import Enemy, GameOutcome, GameState, Item, RoomFeature
 from game.spells import get_spell
 
 
@@ -27,6 +27,7 @@ class BattleChoice(str, Enum):
     DEFEND = "defend"
     SURRENDER = "surrender"
     SPELL = "spell"
+    IMPROVISE = "improvise"
 
 
 SURRENDER_HP_FRACTION = 0.42
@@ -54,6 +55,34 @@ def _mitigate_enemy_damage(raw: int, state: GameState) -> int:
     reduction = state.effective_armor() // 2 + state.effective_agility() // 3
     out = int(d) - reduction
     return max(1, out)
+
+
+def _resolve_improv(
+    state: GameState, improv_id: str
+) -> tuple[str, RoomFeature | Item] | None:
+    for feat in state.current_room().features:
+        if (
+            feat.id == improv_id
+            and feat.improvised_weapon
+            and not feat.used
+            and feat.improv_damage > 0
+        ):
+            return ("feature", feat)
+    for item in state.player.inventory:
+        if item.id == improv_id and item.improvised_weapon and item.improv_damage > 0:
+            return ("item", item)
+    return None
+
+
+def _consume_improv(state: GameState, kind: str, source: RoomFeature | Item) -> None:
+    if kind == "feature":
+        assert isinstance(source, RoomFeature)
+        if source.breaks_on_use:
+            source.used = True
+    else:
+        assert isinstance(source, Item)
+        if source.breaks_on_use and source in state.player.inventory:
+            state.player.inventory.remove(source)
 
 
 def _enemy_in_room(state: GameState, enemy_id: str) -> Enemy | None:
@@ -123,6 +152,7 @@ def apply_player_turn(
     choice: BattleChoice,
     *,
     spell_id: str | None = None,
+    improv_id: str | None = None,
 ) -> BattleRoundOutcome:
     """Apply only the player's action. If the fight continues, ``await_enemy_strike`` is True."""
 
@@ -166,6 +196,62 @@ def apply_player_turn(
     if choice == BattleChoice.DEFEND:
         lines.append("You raise your guard.")
         state.battle_guard_next = True
+        return BattleRoundOutcome(
+            log_lines=lines,
+            battle_ended=False,
+            victory=False,
+            surrendered=False,
+            player_defeated=False,
+            await_enemy_strike=True,
+        )
+
+    if choice == BattleChoice.IMPROVISE:
+        if not improv_id:
+            lines.append("You glance around but hesitate.")
+            return BattleRoundOutcome(
+                log_lines=lines,
+                battle_ended=False,
+                victory=False,
+                surrendered=False,
+                player_defeated=False,
+                await_enemy_strike=True,
+            )
+
+        resolved = _resolve_improv(state, improv_id)
+        if resolved is None:
+            lines.append("That improvised weapon is no longer available.")
+            return BattleRoundOutcome(
+                log_lines=lines,
+                battle_ended=False,
+                victory=False,
+                surrendered=False,
+                player_defeated=False,
+                await_enemy_strike=True,
+            )
+
+        kind, source = resolved
+        raw_damage = source.improv_damage
+        dealt = min(raw_damage, enemy.hp)
+        enemy.hp -= dealt
+        name = source.name
+        lines.append(f"You swing the {name} for {dealt} damage.")
+        _consume_improv(state, kind, source)
+
+        if enemy.hp <= 0:
+            enemy.alive = False
+            enemy.backing_off = False
+            state.pending_battle_enemy_id = None
+            lines.append(f"The {enemy.name} is defeated!")
+            return BattleRoundOutcome(
+                log_lines=lines,
+                battle_ended=True,
+                victory=True,
+                surrendered=False,
+                player_defeated=False,
+                await_enemy_strike=False,
+                loot_dropped=_loot_from_enemy(enemy),
+            )
+
         return BattleRoundOutcome(
             log_lines=lines,
             battle_ended=False,
@@ -298,10 +384,13 @@ def apply_round(
     choice: BattleChoice,
     *,
     spell_id: str | None = None,
+    improv_id: str | None = None,
 ) -> BattleRoundOutcome:
     """Player turn then enemy turn (when applicable). Used by tests and scripts."""
 
-    p = apply_player_turn(state, enemy_id, choice, spell_id=spell_id)
+    p = apply_player_turn(
+        state, enemy_id, choice, spell_id=spell_id, improv_id=improv_id
+    )
     if p.battle_ended or not p.await_enemy_strike:
         return p
     e = apply_enemy_turn(state, enemy_id)

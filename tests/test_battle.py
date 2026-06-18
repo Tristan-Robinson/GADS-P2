@@ -77,6 +77,29 @@ def test_run_scripted_battle_kills_goblin() -> None:
     assert not state.rooms["hall"].enemies[0].alive
 
 
+def test_improvise_damages_and_breaks_feature() -> None:
+    from game.models import RoomFeature
+
+    state = build_initial_state()
+    engine.apply_action(state, PlayerAction(action=ActionType.GO, direction="north"))
+    feat = RoomFeature(
+        id="test_chain_rack",
+        name="loose chain rack",
+        description="Chains hang from a rack.",
+        improvised_weapon=True,
+        improv_damage=5,
+    )
+    state.rooms["hall"].features.append(feat)
+    enemy = state.rooms["hall"].enemies[0]
+    hp_before = enemy.hp
+    engine.apply_action(state, PlayerAction(action=ActionType.ATTACK, target="goblin"))
+    eid = state.pending_battle_enemy_id
+    out = apply_round(state, eid, BattleChoice.IMPROVISE, improv_id=feat.id)
+    assert enemy.hp < hp_before
+    assert feat.used
+    assert any("swing" in line.lower() for line in out.log_lines)
+
+
 def test_spell_round_spends_mana_and_hits() -> None:
     state = build_initial_state()
     state.player.known_spell_ids.append("ember_bolt")

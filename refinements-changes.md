@@ -127,11 +127,57 @@ git history for full diffs.
 
 ---
 
+## 2026-05-14 — Environmental interactions and witty rejections
+
+**Decision:** Add room **fixtures** (`interact`), **crafting** at workstations
+(goop potion from ichor + vial), **combine**, battle-panel **Improvise** for
+room objects, and a **`reject`** parser/narrator path for impossible commands
+(silly tone, no state change). Engine remains authoritative; LLM adds personality.
+
+**Files:** `game/crafting.py`, `game/models.py` (`RoomFeature`), `game/engine.py`,
+`llm/prompts.py` (dual narrator modes), `gui/widgets.py` (`BattlePanel`).
+
+---
+
+## 2026-05-14 — Narrator grounding, Q&A, clarify, random fixtures
+
+**Decision:** Add `room_facts_summary()` for LLM ground truth; new **`ask`** and
+**`clarify`** actions with dedicated narrator prompts; parser guards so questions
+are not mapped to `look` and vague input not to `help`; replace fixed per-level
+fixtures with themed **random pools** (0–2 per room).
+
+**Files:** `game/models.py`, `game/engine.py`, `game/levels.py`, `llm/parser.py`,
+`llm/prompts.py`, tests `test_parser.py`, `test_levels.py`.
+
+---
+
 ## Open follow-ups (not yet implemented)
 
 - Optional `pytest` in `requirements.txt` (currently documented as manual `pip install pytest`)
 - Desktop launcher script for Ollama plus `main.py` demos
 - In-game timing metrics for parser and narrator latency
 - Save/load and larger dungeons beyond the single `world.py` graph
+- Standalone in-game **tutorial** (How to play expanded instead)
 
 Add dated entries below as the project evolves.
+
+---
+
+## 2026-06-11 — Playtest feedback: UX polish (AI-assisted implementation)
+
+**Decision:** Implement playtest-driven UX without changing core engine authority.
+
+**Shipped:**
+
+- **Auto look** — successful `go` sets `narration_mode="look"`; narrator merges movement + survey (`game/engine.py`, `llm/prompts.py`).
+- **Multi-command** — `game/nlp.split_player_commands()`; `LLMWorker` runs segments sequentially; input queues while busy (`gui/app.py`).
+- **Chain clarify** — failures on 2nd+ chained commands use clarify narration (`gui/app.py`, `llm/prompts.py`).
+- **Keyword UX** — legend + hover (`gui/highlight.py`, `gui/pause_menu.py`); drag-to-input, click copy, right-click Paste (`gui/widgets.py`, `gui/clipboard.py`, `gui/scenes.py`).
+- **Command bar** — full cursor editing, history, Ctrl+C/V (`gui/input_text.py`, `gui/widgets.py`).
+- **Pack layout** — `ROW_H` / `ROW_GAP` in `gui/inventory_overlay.py` so summaries do not overlap.
+- **How to play** — pause menu sections for command bar, story log, color key (`gui/pause_menu.py`).
+- **Tests** — NLP, worker queue, clipboard, input box, keyword paste, inventory layout (108+ total).
+
+**Deferred:** Full guided tutorial (time); narrative intro (endless crawler scope).
+
+**Bugfixes:** Centralized `pygame.scrap` in `gui/clipboard.py` to fix `UnboundLocalError` on Descend / narration input.

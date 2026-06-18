@@ -16,11 +16,14 @@ from typing import Optional
 
 import pygame
 
-from game import engine
+from game import engine, nlp
 from game.actions import ActionResult, ActionType, PlayerAction
 from game.models import GameState
+from gui.clipboard import init_clipboard
 from llm.narrator import Narrator
 from llm.parser import IntentParser
+
+init_clipboard()
 
 
 WINDOW_TITLE = "Cryptoriale"
@@ -33,6 +36,36 @@ def _display_flags(display_mode: str) -> int:
     if display_mode == "borderless":
         return pygame.NOFRAME
     return 0
+
+
+def _should_break_chain(
+    action: Optional[PlayerAction], result: Optional[ActionResult]
+) -> bool:
+    if action is not None and action.action == ActionType.QUIT:
+        return True
+    if result is None:
+        return False
+    if result.battle_pending:
+        return True
+    if result.descend:
+        return True
+    if result.open_quest_offer_ui or result.open_merchant_ui:
+        return True
+    if result.game_over:
+        return True
+    return False
+
+
+def _clarify_if_chained_failure(
+    index: int, segment: str, result: ActionResult
+) -> tuple[ActionResult, bool]:
+    if index == 0 or result.success:
+        return result, False
+    if result.narration_mode in ("clarify", "reject", "ask", "interact"):
+        return result, False
+    result.narration_mode = "clarify"
+    result.player_intent = segment
+    return result, True
 
 
 @dataclass
@@ -61,11 +94,13 @@ class LLMWorker:
     def busy(self) -> bool:
         return self._busy.is_set()
 
+    @property
+    def pending_count(self) -> int:
+        return self._jobs.qsize() + self._results.qsize()
+
     def submit_turn(self, state: GameState, user_input: str) -> bool:
-        if self._busy.is_set():
-            return False
-        self._busy.set()
         self._jobs.put((state, user_input))
+        self._busy.set()
         return True
 
     def poll(self) -> Optional[TurnResult]:
@@ -73,32 +108,62 @@ class LLMWorker:
             result = self._results.get_nowait()
         except queue.Empty:
             return None
-        self._busy.clear()
+        if self._jobs.empty() and self._results.empty():
+            self._busy.clear()
         return result
+
+    def _run_segment(self, state: GameState, segment: str) -> TurnResult:
+        action = self.parser.parse(segment, state)
+        result = engine.apply_action(state, action)
+        if result is not None and result.battle_pending:
+            narration = ""
+        elif result is not None and (
+            result.open_quest_offer_ui or result.open_merchant_ui
+        ):
+            narration = (result.message or "").strip()
+        else:
+            narration = self.narrator.narrate(result, state)
+        return TurnResult(
+            user_input=segment,
+            action=action,
+            result=result,
+            narration=narration,
+            battle_pending=bool(result.battle_pending) if result else False,
+        )
+
+    def _process_job(self, state: GameState, user_input: str) -> None:
+        segments = nlp.split_player_commands(user_input)
+        for index, segment in enumerate(segments):
+            try:
+                turn = self._run_segment(state, segment)
+                if turn.result is not None:
+                    turn.result, upgraded = _clarify_if_chained_failure(
+                        index, segment, turn.result
+                    )
+                    if upgraded:
+                        turn.narration = self.narrator.narrate(turn.result, state)
+                self._results.put(turn)
+                if _should_break_chain(turn.action, turn.result):
+                    break
+            except Exception as exc:  # pragma: no cover - safety net
+                self._results.put(
+                    TurnResult(
+                        user_input=segment,
+                        action=None,
+                        result=None,
+                        narration="",
+                        error=f"{exc}\n{traceback.format_exc()}",
+                        battle_pending=False,
+                    )
+                )
+                break
 
     def _loop(self) -> None:
         while True:
             state, user_input = self._jobs.get()
+            self._busy.set()
             try:
-                action = self.parser.parse(user_input, state)
-                result = engine.apply_action(state, action)
-                if result is not None and result.battle_pending:
-                    narration = ""
-                elif result is not None and (
-                    result.open_quest_offer_ui or result.open_merchant_ui
-                ):
-                    narration = (result.message or "").strip()
-                else:
-                    narration = self.narrator.narrate(result, state)
-                self._results.put(
-                    TurnResult(
-                        user_input=user_input,
-                        action=action,
-                        result=result,
-                        narration=narration,
-                        battle_pending=bool(result.battle_pending) if result else False,
-                    )
-                )
+                self._process_job(state, user_input)
             except Exception as exc:  # pragma: no cover - safety net
                 self._results.put(
                     TurnResult(
@@ -110,6 +175,9 @@ class LLMWorker:
                         battle_pending=False,
                     )
                 )
+            finally:
+                if self._jobs.empty() and self._results.empty():
+                    self._busy.clear()
 
 
 class App:

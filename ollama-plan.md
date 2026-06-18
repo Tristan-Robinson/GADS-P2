@@ -17,8 +17,13 @@ The game reads model settings from `config.py`:
 
 The integration needs two capabilities on every turn:
 
-1. **Structured command parsing** into a small fixed action set (`look`, `go`, `take`, `use`, `attack`, `talk`, `inventory`, `help`, `quit`).
-2. **Short second-person narration** grounded in engine output, not free-form world generation.
+1. **Structured command parsing** into actions including `interact`, `craft`,
+   `combine`, `ask`, `clarify`, and `reject`, plus movement, combat, and NPC verbs.
+2. **Narration** uses modes (`outcome`, `look`, `ask`, `clarify`, `reject`, `interact`),
+   all grounded in `context.room_facts_summary` (engine-authored room truth) plus
+   action results. Successful **`go`** into a new room uses **`look`** mode so
+   movement and room survey appear in one narration. Questions and vague input
+   no longer default to `look` / `help`.
 
 A general instruction-following chat model is enough for v1. The Python engine owns rules, stats, combat, and win/lose logic. The model does not need tool calling, RAG, or dungeon generation.
 
@@ -46,12 +51,21 @@ If either check fails, `main.py` exits before the game loop with a clear error.
 
 ### Calls per player turn
 
-After startup, a normal turn usually makes **two** Ollama requests:
+After startup, a normal turn usually makes **two** Ollama requests **per command segment**:
 
 1. **Parser** — natural language to `ParsedPlayerAction` JSON.
 2. **Narrator** — `ActionResult` plus context to `NarrationResponse` JSON.
 
+The player may submit **multiple segments** in one line (`go north; take torch`).
+`game/nlp.split_player_commands()` splits on `;`, newlines, and `then` / `and then`.
+`LLMWorker` runs segments sequentially on a background thread; the GUI can **queue**
+further input while busy.
+
 The opening `look` also uses the narrator. Parser retry adds another parser call when the first structured response fails validation.
+
+**Chain stops** (remaining segments are not run) when a step starts combat, opens
+quest/merchant UI, triggers descend, quits, or ends the game. Failed commands
+later in a chain may use **clarify** narration instead of generic failure text.
 
 ### What affects latency
 
@@ -86,14 +100,16 @@ For smoother demos, open the Ollama app first, run one chat message or `ollama r
 
 ```mermaid
 flowchart LR
-  playerInput[PlayerInput] --> parser[IntentParser]
+  playerInput[PlayerInput] --> split[split_player_commands]
+  split --> parser[IntentParser]
   parser --> playerAction[PlayerAction]
   playerAction --> engine[apply_action]
   engine --> actionResult[ActionResult]
   actionResult --> narrator[Narrator]
-  narrator --> terminal[TerminalOutput]
+  narrator --> gui[NarrationPanel]
   gameState[GameState] --> parser
   gameState --> narrator
+  worker[LLMWorker_queue] --> split
 ```
 
 ### Context passed to the model
@@ -132,7 +148,7 @@ The model never mutates `GameState` directly.
 
 1. `ActionResult.to_payload()` serializes engine facts.
 2. `Narrator.narrate()` sends game context and the payload with `format=NarrationResponse.model_json_schema()`.
-3. The `text` field is printed in the terminal.
+3. The `text` field is shown in the Pygame narration panel (keyword highlighting is client-side in `gui/highlight.py`, not LLM-tagged).
 4. On failure, the engine `message` is shown instead.
 
 ## Prompt structure
@@ -172,7 +188,7 @@ The model never mutates `GameState` directly.
 - Second-person prose
 - Only facts from the action result payload
 - On failure, explain without inventing objects
-- Two to four sentences
+- Two to four sentences (movement + survey when `narration_mode` is `look`)
 - No invented stats, items, rooms, or damage
 
 **User message**:
@@ -213,4 +229,6 @@ Ollama may interpret phrasing and narrate outcomes. Ollama may not create rooms,
 - `llm/narrator.py` — narration and fallback
 - `game/models.py` — `context_slice()`
 - `game/engine.py` — authoritative rules and `parse_fallback()`
-- `main.py` — startup checks and turn loop
+- `game/nlp.py` — multi-command splitting
+- `gui/app.py` — `LLMWorker` queue and chain handling
+- `main.py` — startup checks and Pygame app launch

@@ -33,16 +33,25 @@ If you need a complete literal archive, paste older prompts here or keep a paral
 6. **Documentation, build, and git**
    - Add this **`prompts-used.md`**, refresh all **`.md`** docs, **PyInstaller** release build path, **commit and push**.
 
+7. **Playtest feedback (2026-06)**
+   - **Auto look** on successful room entry (`narration_mode="look"`).
+   - **Multi-command** input (`;`, newline, `then`); **type-ahead queue** while Ollama is busy.
+   - **Chain clarify** narration for failed 2nd+ commands in a chain.
+   - **Keyword legend** + hover tooltips; **command bar** cursor editing; **click copy** / **drag** keywords / **right-click Paste**.
+   - **Clipboard module** (`gui/clipboard.py`) — fix pygame `UnboundLocalError` from inner `import pygame.scrap`.
+   - **Pack inventory** row layout — taller rows, gaps, no summary overlap.
+   - **How to play** — document all of the above in pause menu help.
+
 ---
 
 ## Where changes live (code map)
 
 | Area | Contents |
 |------|----------|
-| `game/` | Engine, levels, battle, NPC/quest/merchant logic, models |
-| `gui/` | Pygame app, scenes, inventory overlay, settings, NPC overlays |
+| `game/` | Engine, levels, battle, NPC/quest/merchant logic, models, `nlp.py` command splitting |
+| `gui/` | Pygame app, scenes, inventory overlay, settings, NPC overlays, clipboard, input helpers |
 | `llm/` | Parser/narrator prompts, schemas, Ollama client |
-| `tests/` | Engine, battle, loot/quest placement tests |
+| `tests/` | Engine, battle, loot/quest placement, NLP, clipboard, input, inventory layout, worker queue |
 
 ---
 
@@ -60,5 +69,7 @@ git log --oneline
 
 - [README.md](README.md) — run, controls, features, release build
 - [setup.md](setup.md) — environment and optional PyInstaller build
+- [feedback-summary.md](feedback-summary.md) — playtest feedback and implementation status
+- [critical-feedback.md](critical-feedback.md) — reflection on feedback decisions
 - [refinements-changes.md](refinements-changes.md) — decision log
 - [ollama-plan.md](ollama-plan.md) — Ollama integration

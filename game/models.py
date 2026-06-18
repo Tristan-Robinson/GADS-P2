@@ -39,6 +39,11 @@ class Item:
     defense_bonus: int = 0
     spell_grant_id: str | None = None
     gold_value: int = 0
+    takeable: bool = True
+    material_tag: str = ""
+    improvised_weapon: bool = False
+    improv_damage: int = 0
+    breaks_on_use: bool = True
 
 
 @dataclass
@@ -103,6 +108,20 @@ class Exit:
 
 
 @dataclass
+class RoomFeature:
+    id: str
+    name: str
+    description: str
+    interactable: bool = True
+    improvised_weapon: bool = False
+    improv_damage: int = 0
+    breaks_on_use: bool = True
+    crafting_station: bool = False
+    station_tag: str = ""
+    used: bool = False
+
+
+@dataclass
 class Room:
     id: str
     name: str
@@ -112,6 +131,7 @@ class Room:
     enemies: list[Enemy] = field(default_factory=list)
     is_exit: bool = False
     npcs: list[RoomNPC] = field(default_factory=list)
+    features: list[RoomFeature] = field(default_factory=list)
 
 
 @dataclass
@@ -149,6 +169,10 @@ class GameState:
     draft_quest_offer: QuestOffer | None = None
     active_quests: list[ActiveQuest] = field(default_factory=list)
     declined_quest_npc_ids: set[str] = field(default_factory=set)
+    completed_quest_npc_ids: set[str] = field(default_factory=set)
+    conversation_open: bool = False
+    last_narration: str = ""
+    last_suggested_item: str | None = None
 
     def current_room(self) -> Room:
         return self.rooms[self.current_room_id]
@@ -163,6 +187,21 @@ class GameState:
 
     def blocking_enemies(self) -> list[Enemy]:
         return [e for e in self.visible_enemies() if not e.backing_off]
+
+    def visible_features(self) -> list[RoomFeature]:
+        return [f for f in self.current_room().features if not f.used]
+
+    def improv_weapon_options(self) -> list[tuple[str, str, int]]:
+        """Return (id, display_name, damage) for improvised weapons in the current room."""
+
+        opts: list[tuple[str, str, int]] = []
+        for feat in self.visible_features():
+            if feat.improvised_weapon and feat.improv_damage > 0:
+                opts.append((feat.id, feat.name, feat.improv_damage))
+        for item in self.player.inventory:
+            if item.improvised_weapon and item.improv_damage > 0:
+                opts.append((item.id, item.name, item.improv_damage))
+        return opts
 
     def _item_by_id(self, item_id: str | None) -> Item | None:
         if not item_id:
@@ -224,17 +263,76 @@ class GameState:
     def effective_agility(self) -> int:
         return self.player.agility + sum(it.agility_bonus for it in self._equipped_gear_items())
 
+    def room_facts_summary(self) -> str:
+        """Deterministic paragraph of what exists in the current room (LLM ground truth)."""
+
+        room = self.current_room()
+        parts: list[str] = [f"You are in {room.name}. {room.description}"]
+
+        feats = self.visible_features()
+        if feats:
+            feat_bits = [f"{f.name} ({f.description})" for f in feats]
+            parts.append("Fixtures: " + "; ".join(feat_bits) + ".")
+
+        floor_items = [i.name for i in room.items if i.takeable]
+        if floor_items:
+            parts.append("On the floor: " + ", ".join(floor_items) + ".")
+
+        enemies = self.visible_enemies()
+        if enemies:
+            foe_bits = []
+            for e in enemies:
+                tag = " (backing off)" if e.backing_off else ""
+                foe_bits.append(f"{e.name} {e.hp}/{e.max_hp} HP{tag}")
+            parts.append("Enemies: " + ", ".join(foe_bits) + ".")
+
+        if room.npcs:
+            parts.append("NPCs: " + ", ".join(n.name for n in room.npcs) + ".")
+
+        exit_bits = []
+        for ex in room.exits:
+            label = ex.direction + (" (locked)" if ex.locked else "")
+            exit_bits.append(label)
+        if exit_bits:
+            parts.append("Exits: " + ", ".join(exit_bits) + ".")
+
+        inv = self.inventory_summary()
+        parts.append(f"In your pack: {inv}.")
+        return " ".join(parts)
+
+    def interact_targets(self) -> list[str]:
+        room = self.current_room()
+        names: list[str] = []
+        for feat in self.visible_features():
+            if feat.interactable:
+                names.append(feat.name)
+        for item in room.items:
+            if item.takeable:
+                names.append(item.name)
+        for npc in room.npcs:
+            names.append(npc.name)
+        for enemy in self.visible_enemies():
+            names.append(enemy.name)
+        return names
+
     def available_actions(self) -> list[str]:
+        from game import crafting
+
         room = self.current_room()
         actions: list[str] = ["look", "inventory", "help", "quit"]
         for exit_ in room.exits:
             actions.append(f"go {exit_.direction}")
         for enemy in self.visible_enemies():
             actions.append(f"attack {enemy.name}")
+        for name in self.interact_targets():
+            actions.append(f"interact {name}")
         for item in room.items:
-            actions.append(f"take {item.name}")
-        if room.items:
+            if item.takeable:
+                actions.append(f"take {item.name}")
+        if any(i.takeable for i in room.items):
             actions.append("take all")
+        for recipe in crafting.available_recipes(self):
+            actions.append(f"craft {recipe.name}")
         for npc in room.npcs:
             actions.append(f"talk {npc.name}")
             if npc.kind == "merchant":
@@ -254,15 +352,27 @@ class GameState:
         return actions
 
     def context_slice(self) -> dict:
+        from game import crafting
+
         room = self.current_room()
         weapon = self.equipped_weapon()
         armor = self.equipped_armor()
         rings = self.equipped_rings()
         amulet = self.equipped_amulet()
+        visible_feats = self.visible_features()
+        visible_item_names = [i.name for i in room.items if i.takeable]
         return {
             "room_id": room.id,
             "room_name": room.name,
             "room_description": room.description,
+            "room_facts_summary": self.room_facts_summary(),
+            "visible_item_names": visible_item_names,
+            "takeable_item_names": visible_item_names,
+            "visible_feature_names": [f.name for f in visible_feats],
+            "last_suggested_item": self.last_suggested_item,
+            "interact_targets": self.interact_targets(),
+            "conversation_open": self.conversation_open,
+            "last_narration": self.last_narration[-500:] if self.last_narration else "",
             "exits": [
                 {
                     "direction": exit_.direction,
@@ -275,8 +385,24 @@ class GameState:
                     "id": item.id,
                     "name": item.name,
                     "kind": item.kind.value,
+                    "takeable": item.takeable,
+                    "material_tag": item.material_tag,
                 }
                 for item in room.items
+            ],
+            "features": [
+                {
+                    "id": feat.id,
+                    "name": feat.name,
+                    "interactable": feat.interactable,
+                    "crafting_station": feat.crafting_station,
+                    "station_tag": feat.station_tag,
+                    "improvised_weapon": feat.improvised_weapon,
+                }
+                for feat in visible_feats
+            ],
+            "craft_recipes": [
+                {"id": r.id, "name": r.name} for r in crafting.available_recipes(self)
             ],
             "enemies": [
                 {
@@ -294,6 +420,7 @@ class GameState:
                     "name": item.name,
                     "usable": item.usable,
                     "kind": item.kind.value,
+                    "material_tag": item.material_tag,
                 }
                 for item in self.player.inventory
             ],
